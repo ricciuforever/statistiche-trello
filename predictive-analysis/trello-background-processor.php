@@ -1,75 +1,40 @@
 <?php
 /**
  * Modulo per l'Elaborazione in Background e Salvataggio Permanente
- * dell'Analisi Predittiva Trello tramite WP-Cron. (Versione 4.7 - Prompt Refined)
+ * dell'Analisi Predittiva Trello tramite WP-Cron. (Versione 4.9 - DB Upgrade Fix)
  */
 
 if (!defined('ABSPATH')) exit;
 
-// Nome della tabella custom per i risultati e dell'opzione per la coda
+// --- Costanti del Plugin ---
+define('STPA_VERSION', '1.1.0');
+define('STPA_DB_VERSION_OPTION', 'stpa_db_version');
+
 global $wpdb;
 define('STPA_RESULTS_TABLE', $wpdb->prefix . 'stpa_predictive_results');
 define('STPA_QUEUE_TABLE', $wpdb->prefix . 'stpa_analysis_queue');
-define('STPA_QUEUE_OPTION', 'stpa_background_analysis_queue'); // Mantenuto per i metadati
-
-// Nome dell'evento Cron
-define('STPA_CRON_EVENT', 'stpa_process_analysis_batch_event');
-// Nome della tabella custom per la cache delle schede base Trello
+define('STPA_QUEUE_OPTION', 'stpa_background_analysis_queue');
 define('STPA_CARDS_CACHE_TABLE', $wpdb->prefix . 'stpa_trello_cards_cache');
+define('STPA_COMMENTS_CACHE_TABLE', $wpdb->prefix . 'stpa_card_comments_cache');
 
-// Costante per l'evento di sincronizzazione oraria
+define('STPA_CRON_EVENT', 'stpa_process_analysis_batch_event');
 define('STPA_HOURLY_SYNC_EVENT', 'stpa_hourly_trello_cards_sync');
 define('STPA_CARD_CACHE_DURATION', 1 * HOUR_IN_SECONDS);
 
-/**
- * Funzione che contiene la logica di sincronizzazione delle schede Trello.
- */
-function stpa_perform_trello_sync($apiKey, $apiToken) {
-    global $wpdb;
-    $cards_cache_table = STPA_CARDS_CACHE_TABLE;
-    $synced_cards_count = 0;
 
-    $all_user_boards = get_trello_boards($apiKey, $apiToken);
-    if (is_wp_error($all_user_boards) || empty($all_user_boards)) {
-        error_log("STPA Sync Error: Nessuna bacheca Trello trovata. Controlla le credenziali API.");
-        return 0;
+// --- Logica di Installazione e Aggiornamento ---
+add_action('admin_init', 'stpa_check_and_upgrade_db');
+function stpa_check_and_upgrade_db() {
+    $current_db_version = get_option(STPA_DB_VERSION_OPTION, '1.0.0');
+
+    if (version_compare($current_db_version, STPA_VERSION, '<')) {
+        stpa_create_plugin_tables();
+        update_option(STPA_DB_VERSION_OPTION, STPA_VERSION);
     }
-
-    $targetBoardIds = array_column($all_user_boards, 'id');
-    foreach ($targetBoardIds as $boardId) {
-        $cards_from_single_board = get_trello_cards($boardId, $apiKey, $apiToken);
-        if (is_array($cards_from_single_board)) {
-            foreach ($cards_from_single_board as $card) {
-                if (empty($card['id']) || empty($card['idBoard'])) continue;
-
-                $is_numeric_name = is_numeric($card['name']);
-
-                $data = [
-                    'card_id'            => sanitize_text_field($card['id']),
-                    'board_id'           => sanitize_text_field($card['idBoard']),
-                    'card_name'          => sanitize_text_field($card['name']),
-                    'card_url'           => esc_url_raw($card['url'] ?? "https://trello.com/c/{$card['id']}"),
-                    'date_last_activity' => gmdate('Y-m-d H:i:s', strtotime($card['dateLastActivity'])),
-                    'is_numeric_name'    => $is_numeric_name,
-                    'last_synced_at'     => current_time('mysql')
-                ];
-                $format = ['%s', '%s', '%s', '%s', '%s', '%d', '%s'];
-
-                $wpdb->replace($cards_cache_table, $data, $format);
-                $synced_cards_count++;
-            }
-        }
-    }
-
-    update_option('stpa_last_trello_cards_sync', time());
-    return $synced_cards_count;
 }
 
-/**
- * Hook di attivazione del plugin: crea le tabelle custom.
- */
-register_activation_hook(WP_PLUGIN_DIR . '/statistiche-trello/statistiche-trello.php', 'stpa_create_plugin_tables');
 function stpa_create_plugin_tables() {
+    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
     stpa_create_cards_cache_table();
     stpa_create_queue_table();
     stpa_create_comments_cache_table();
@@ -95,7 +60,6 @@ function stpa_create_cards_cache_table() {
         INDEX date_last_activity_idx (date_last_activity),
         INDEX is_numeric_name_idx (is_numeric_name)
     ) $charset_collate;";
-    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
     dbDelta($sql);
 }
 
@@ -113,13 +77,12 @@ function stpa_create_queue_table() {
         INDEX analysis_status_idx (analysis_id, status),
         UNIQUE KEY unique_analysis_card (analysis_id, card_id)
     ) $charset_collate;";
-    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
     dbDelta($sql);
 }
 
 function stpa_create_comments_cache_table() {
     global $wpdb;
-    $table_name = $wpdb->prefix . 'stpa_card_comments_cache';
+    $table_name = STPA_COMMENTS_CACHE_TABLE;
     $charset_collate = $wpdb->get_charset_collate();
     $sql = "CREATE TABLE $table_name (
         id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -130,7 +93,6 @@ function stpa_create_comments_cache_table() {
         PRIMARY KEY  (id),
         INDEX card_id_idx (card_id)
     ) $charset_collate;";
-    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
     dbDelta($sql);
 }
 
@@ -151,9 +113,11 @@ function stpa_create_results_table() {
         PRIMARY KEY  (id),
         UNIQUE KEY unique_analysis_card_period (analysis_id, card_id, period)
     ) $charset_collate;";
-    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
     dbDelta($sql);
 }
+
+
+// --- Logica Cron e API ---
 
 add_filter('cron_schedules', 'stpa_add_cron_interval');
 function stpa_add_cron_interval($schedules) {
