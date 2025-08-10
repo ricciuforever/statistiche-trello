@@ -94,7 +94,7 @@ function wp_trello_merge_duplicate_cards($card_name, $apiKey, $apiToken) {
     usort($all_cards_with_name, function($a, $b) {
         return hexdec(substr($a['id'], 0, 8)) - hexdec(substr($b['id'], 0, 8));
     });
-    
+
     // 3. Identifica la master (vecchia) e quelle da archiviare (le altre)
     $oldest_card = $all_cards_with_name[0];
     $cards_to_archive = array_slice($all_cards_with_name, 1);
@@ -105,7 +105,7 @@ function wp_trello_merge_duplicate_cards($card_name, $apiKey, $apiToken) {
         $message = 'Operazione annullata. La scheda più recente con questo nome non si trova nella board/lista corretta ("01_GESTIONALE" / "RICHIESTE RICEVUTE").';
         return ['success' => false, 'message' => $message];
     }
-    
+
     // 5. --- BLOCCO DESCRIZIONE ROBUSTO ---
     $description_parts = [];
     // Itera su TUTTE le schede (vecchia e nuove) per raccogliere le descrizioni
@@ -120,7 +120,7 @@ function wp_trello_merge_duplicate_cards($card_name, $apiKey, $apiToken) {
 
     // Unisci le parti raccolte
     $final_description = implode("\n\n", $description_parts);
-    
+
     // Crea il footer
     $merge_date = date('d/m/Y H:i');
     $footer = "\n\n--- Unione eseguita il " . $merge_date . ". L'ultima richiesta è del " . date('d/m/Y H:i', hexdec(substr($newest_card['id'], 0, 8))) . ". ---";
@@ -153,7 +153,7 @@ function wp_trello_merge_duplicate_cards($card_name, $apiKey, $apiToken) {
             $archived_count++;
         }
     }
-    
+
     $success_message = 'Unione completata!<ul>';
     $success_message .= '<li>Scheda principale (la più vecchia) aggiornata e spostata: ' . esc_html($oldest_card['id']) . '</li>';
     $success_message .= '<li>' . esc_html($archived_count) . ' su ' . count($cards_to_archive) . ' schede duplicate archiviate.</li>';
@@ -239,7 +239,7 @@ if (!function_exists('wp_trello_merger_page_callback')) {
                     <h2>Unione Manuale per Nome</h2>
                     <p>Inserisci un nome scheda per cercare e unire i suoi duplicati secondo le regole definite.</p>
                     <?php if (!empty($feedback_message)): ?>
-                        <div class="notice <?php echo esc_attr($message_class); ?> is-dismissible"> 
+                        <div class="notice <?php echo esc_attr($message_class); ?> is-dismissible">
                             <p><?php echo wp_kses_post($feedback_message); ?></p>
                         </div>
                     <?php endif; ?>
@@ -325,8 +325,15 @@ if (!function_exists('wp_trello_merger_automatic_merge_cron_job')) {
     function wp_trello_merger_automatic_merge_cron_job() {
         error_log('WP Trello Merger: Cron job avviato.'); // LOG INIZIALE
 
-        $apiKey = 'c4e99df1085f9da64e648c059868cfb3';
-        $apiToken = 'ATTA03792121772273098c6b4458f2b3e9529ed361f08075722e975ccbd24fe4c81f98FB357C';
+        // Carica le credenziali in modo sicuro da wp-config.php
+        $apiKey = defined('TRELLO_API_KEY') ? TRELLO_API_KEY : '';
+        $apiToken = defined('TRELLO_API_TOKEN') ? TRELLO_API_TOKEN : '';
+
+        // Se le credenziali non sono definite, termina e logga un errore.
+        if (empty($apiKey) || empty($apiToken)) {
+            error_log('WP Trello Merger ERROR: Le costanti TRELLO_API_KEY o TRELLO_API_TOKEN non sono definite in wp-config.php. Il cron job non può procedere.');
+            return;
+        }
 
         // Verifica la disponibilità delle funzioni API helper prima di procedere
         if (!function_exists('wp_trello_merger_api_get_request')) {
