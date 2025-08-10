@@ -1,6 +1,6 @@
 <?php
 /**
- * Modulo Consolidato di Analisi Predittiva Trello - v4.8 (Benchmark Implemented)
+ * Modulo Consolidato di Analisi Predittiva Trello - v4.11 (Final Bugfixes)
  */
 
 if (!defined('ABSPATH')) exit;
@@ -95,7 +95,6 @@ function stpa_ajax_start_background_analysis() {
         return;
     }
 
-    // --- IMPLEMENTAZIONE BENCHMARK ---
     $benchmark_cards = stpa_get_cards_from_list(STPA_BENCHMARK_LIST_ID);
     $benchmark_text = '';
     if (!is_wp_error($benchmark_cards) && !empty($benchmark_cards)) {
@@ -105,7 +104,6 @@ function stpa_ajax_start_background_analysis() {
             }
         }
     }
-    // --- FINE IMPLEMENTAZIONE BENCHMARK ---
 
     $analysis_id = 'analysis_' . time();
     $total_cards_to_process = count($pre_selected_card_ids);
@@ -131,7 +129,7 @@ function stpa_ajax_start_background_analysis() {
         'total_cards'       => $total_cards_to_process,
         'started_at'        => current_time('mysql'),
         'finished_at'       => null,
-        'benchmark_text'    => $benchmark_text, // Aggiunto testo di benchmark
+        'benchmark_text'    => $benchmark_text,
     ];
 
     update_option(STPA_QUEUE_OPTION, $queue_meta);
@@ -166,6 +164,11 @@ function stpa_ajax_get_background_status() {
     $processed_cards = (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(id) FROM $queue_table WHERE analysis_id = %s AND status = 'completed'", $analysis_id));
     $queue_meta['processed_cards'] = $processed_cards;
 
+    // **BUGFIX**: Recalculate chunk info and add to the response for the UI.
+    $batch_size = 100;
+    $queue_meta['total_chunks'] = !empty($queue_meta['total_cards']) ? ceil($queue_meta['total_cards'] / $batch_size) : 0;
+    $queue_meta['processed_chunks'] = !empty($processed_cards) ? floor($processed_cards / $batch_size) : 0;
+
     if (in_array($queue_meta['status'], ['running', 'completed', 'completed_with_errors', 'stalled'])) {
         $table_name = STPA_RESULTS_TABLE;
         $db_results = $wpdb->get_results($wpdb->prepare("SELECT * FROM $table_name WHERE analysis_id = %s ORDER BY probability DESC", $analysis_id), ARRAY_A);
@@ -198,8 +201,6 @@ function stpa_ajax_clear_previous_analysis() {
 }
 
 // --- Funzioni di Supporto ---
-
-// NUOVA FUNZIONE HELPER per ottenere schede da una lista specifica
 function stpa_get_cards_from_list($list_id) {
     $api_key = defined('TRELLO_API_KEY') ? TRELLO_API_KEY : '';
     $api_token = defined('TRELLO_API_TOKEN') ? TRELLO_API_TOKEN : '';
@@ -213,16 +214,12 @@ function stpa_get_cards_from_list($list_id) {
 
     $response = wp_remote_get($url, ['timeout' => 20]);
 
-    if (is_wp_error($response)) {
-        return $response;
-    }
+    if (is_wp_error($response)) return $response;
 
     $body = wp_remote_retrieve_body($response);
     $cards = json_decode($body, true);
 
-    if (json_last_error() !== JSON_ERROR_NONE) {
-        return new WP_Error('json_error', 'Failed to decode Trello API response.');
-    }
+    if (json_last_error() !== JSON_ERROR_NONE) return new WP_Error('json_error', 'Failed to decode Trello API response.');
 
     return $cards;
 }
@@ -268,17 +265,19 @@ function stpa_enqueue_dashboard_assets($hook) {
 
     $plugin_dir_url = plugin_dir_url(__FILE__);
 
-    wp_enqueue_style('stpa-styles', $plugin_dir_url . 'css/stpa-styles.css', [], '1.0.1');
-    wp_enqueue_script('stpa-scripts', $plugin_dir_url . 'js/stpa-scripts.js', [], '1.0.1', true);
+    wp_enqueue_style('stpa-styles', $plugin_dir_url . 'css/stpa-styles.css', [], '1.1.0');
+    wp_enqueue_script('stpa-scripts', $plugin_dir_url . 'js/stpa-scripts.js', [], '1.1.0', true);
 
+    // **BUGFIX**: Usa wp_add_inline_script per passare dati, metodo moderno e corretto.
     $last_analysis_status = get_option(STPA_QUEUE_OPTION, ['status' => 'idle', 'analysis_id' => '']);
-    wp_localize_script('stpa-scripts', 'stpa_data', [
+    $data_for_js = [
         'ajax_url' => admin_url('admin-ajax.php'),
         'nonce' => wp_create_nonce('stpa_nonce'),
         'thresholds' => $GLOBALS['stpa_probability_thresholds'],
         'periods' => $GLOBALS['stpa_analysis_periods'],
         'last_analysis_status' => $last_analysis_status
-    ]);
+    ];
+    wp_add_inline_script('stpa-scripts', 'const stpa_data = ' . json_encode($data_for_js) . ';', 'before');
 }
 
 
@@ -310,7 +309,7 @@ function stpa_display_dashboard() {
 
 function stpa_get_card_comments_cached($card_id) {
     global $wpdb;
-    $table_name = $wpdb->prefix . 'stpa_card_comments_cache';
+    $table_name = STPA_COMMENTS_CACHE_TABLE;
     $cache_duration = 6 * HOUR_IN_SECONDS;
 
     $cached_comments_row = $wpdb->get_row($wpdb->prepare("SELECT comments_data_json, last_fetched_at, etag FROM $table_name WHERE card_id = %s", $card_id), ARRAY_A);
