@@ -25,7 +25,7 @@ jobs:
       uses: SamKirkland/FTP-Deploy-Action@v4.3.4
       with:
         # Indirizzo del server FTP (es. ftp.tuodominio.com)
-        # Legge il valore dal Secret 'FTP_SERVER' che creeremo tra poco
+        # Legge il valore dal Secret 'FTP_SERVER'
         server: ${{ secrets.FTP_SERVER }}
         
         # Username per l'accesso FTP
@@ -36,7 +36,5 @@ jobs:
         # Legge il valore dal Secret 'FTP_PASSWORD'
         password: ${{ secrets.FTP_PASSWORD }}
         
-        # Cartella di destinazione sul server FTP.
-        # Modifica 'public_html/statistiche-trello/' con il percorso corretto sul tuo server!
-        # Esempio: 'www/', 'httpdocs/', 'public_html/progetto/'
-        server-dir: public_html/statistiche-trello/
+        # Cartella di destinazione sul server FTP (AGGIORNATA)
+        server-dir: /httpdocs/wp-content/plugins/statistiche-trello/
