@@ -1,0 +1,42 @@
+# Nome del workflow che vedrai nella tab "Actions" di GitHub
+name: Deploy to FTP
+
+# Trigger: quando eseguire il workflow
+on:
+  # Esegui il workflow ogni volta che fai un push sul branch 'main'
+  push:
+    branches:
+      - main
+
+# Lavori (jobs) da eseguire
+jobs:
+  # Definiamo un unico job chiamato 'ftp-deploy'
+  ftp-deploy:
+    # Il tipo di macchina virtuale su cui eseguire il job
+    runs-on: ubuntu-latest
+    
+    steps:
+    # 1. Checkout del codice: scarica il codice del tuo repository sulla macchina virtuale
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    # 2. Deploy FTP: Invia i file al server FTP
+    - name: FTP Deploy
+      uses: SamKirkland/FTP-Deploy-Action@v4.3.4
+      with:
+        # Indirizzo del server FTP (es. ftp.tuodominio.com)
+        # Legge il valore dal Secret 'FTP_SERVER' che creeremo tra poco
+        server: ${{ secrets.FTP_SERVER }}
+        
+        # Username per l'accesso FTP
+        # Legge il valore dal Secret 'FTP_USERNAME'
+        username: ${{ secrets.FTP_USERNAME }}
+        
+        # Password per l'accesso FTP
+        # Legge il valore dal Secret 'FTP_PASSWORD'
+        password: ${{ secrets.FTP_PASSWORD }}
+        
+        # Cartella di destinazione sul server FTP.
+        # Modifica 'public_html/statistiche-trello/' con il percorso corretto sul tuo server!
+        # Esempio: 'www/', 'httpdocs/', 'public_html/progetto/'
+        server-dir: public_html/statistiche-trello/
