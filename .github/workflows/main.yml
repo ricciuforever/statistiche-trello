@@ -1,14 +1,13 @@
 # Nome del workflow che vedrai nella tab "Actions" di GitHub
 name: Deploy to FTP
 
-# Trigger: quando eseguire il workflow
 on:
-  # Esegui il workflow ogni volta che fai un push sul branch 'main'
   push:
     branches:
       - main
+  # Aggiungi questa riga per permettere l'avvio manuale
+  workflow_dispatch:
 
-# Lavori (jobs) da eseguire
 jobs:
   # Definiamo un unico job chiamato 'ftp-deploy'
   ftp-deploy:
