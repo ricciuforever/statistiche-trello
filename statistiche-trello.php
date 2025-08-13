@@ -27,6 +27,9 @@ include_once plugin_dir_path(__FILE__) . 'sheet/sheet-generator.php';
 // NUOVO: Modulo per la generazione del Foglio Preventivi
 include_once plugin_dir_path(__FILE__) . 'sheet/trello-quotes-sheet-generator.php'; // Nuovo file
 
+// NUOVO: Modulo Marketing Advisor
+include_once plugin_dir_path(__FILE__) . 'marketing-advisor/marketing-advisor-main.php';
+
 // Aggiunge il dashboard alla pagina principale del plugin
 //add_action('wp_trello_plugin_page_end', 'stpa_display_dashboard_hook');
 /*function stpa_display_dashboard_hook() {
