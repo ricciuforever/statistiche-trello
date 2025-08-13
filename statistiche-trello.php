@@ -27,8 +27,326 @@ include_once plugin_dir_path(__FILE__) . 'sheet/sheet-generator.php';
 // NUOVO: Modulo per la generazione del Foglio Preventivi
 include_once plugin_dir_path(__FILE__) . 'sheet/trello-quotes-sheet-generator.php'; // Nuovo file
 
-// NUOVO: Modulo Marketing Advisor
-include_once plugin_dir_path(__FILE__) . 'marketing-advisor/marketing-advisor-main.php';
+// ========= INIZIO MODULO MARKETING ADVISOR CONSOLIDATO =========
+
+/**
+ * Funzione per renderizzare la pagina di amministrazione del Marketing Advisor.
+ * Include CSS e JS inline per essere auto-contenuta.
+ */
+function stma_render_advisor_page() {
+    ?>
+    <style>
+        .stma-wrap { max-width: 800px; margin-top: 20px; }
+        .stma-wrap h1 .dashicons-before { font-size: 32px; height: 32px; width: 32px; margin-right: 8px; }
+        .stma-controls { margin-top: 20px; margin-bottom: 30px; }
+        .stma-results-container { border: 1px solid #c3c4c7; background: #fff; padding: 1px 20px 20px; margin-top: 20px; box-shadow: 0 1px 1px rgba(0,0,0,.04); display: none; }
+        .stma-loader { text-align: center; padding: 40px 0; }
+        .stma-loader .spinner { float: none; margin: 0 auto 10px auto; vertical-align: middle; }
+        .stma-loader p { font-size: 1.1em; }
+        .stma-results-content h3 { font-size: 1.2em; margin-top: 1.5em; margin-bottom: 0.5em; border-bottom: 1px solid #eee; padding-bottom: 5px;}
+        .stma-results-content ul { list-style: disc; padding-left: 20px; }
+        .stma-results-content li { margin-bottom: 0.8em; }
+        #stma-error-container { display: none; margin-top: 15px; }
+    </style>
+
+    <div class="wrap stma-wrap">
+        <h1><span class="dashicons-before dashicons-robot"></span> Marketing Advisor AI</h1>
+        <p>Questo strumento analizza i dati di marketing degli ultimi 7 giorni, li combina con le previsioni di chiusura dei lead e fornisce suggerimenti strategici per ottimizzare il budget.</p>
+
+        <div class="stma-controls">
+            <button id="stma-run-analysis" class="button button-primary button-hero">
+                <span class="dashicons dashicons-analytics"></span> Avvia Analisi Strategica
+            </button>
+        </div>
+
+        <div id="stma-results-container" class="stma-results-container">
+            <h2><span class="dashicons dashicons-lightbulb"></span> Risultati dell'Analisi</h2>
+            <div id="stma-loader" class="stma-loader" style="display:none;">
+                <span class="spinner is-active"></span>
+                <p>Analisi in corso... L'intelligenza artificiale sta elaborando i dati. Potrebbero volerci fino a 2 minuti.</p>
+            </div>
+            <div id="stma-error-container" class="notice notice-error"></div>
+            <div id="stma-results-content" class="stma-results-content"></div>
+        </div>
+    </div>
+
+    <script type="text/javascript">
+        jQuery(document).ready(function($) {
+            $('#stma-run-analysis').on('click', function() {
+                var $button = $(this);
+                var $resultsContainer = $('#stma-results-container');
+                var $loader = $('#stma-loader');
+                var $resultsContent = $('#stma-results-content');
+                var $errorContainer = $('#stma-error-container');
+
+                // Reset UI
+                $button.prop('disabled', true).html('<span class="dashicons dashicons-update-alt spin"></span> Analisi in corso...');
+                $resultsContent.html('');
+                $errorContainer.hide().html('');
+                $resultsContainer.show();
+                $loader.show();
+
+                $.ajax({
+                    url: '<?php echo admin_url('admin-ajax.php'); ?>',
+                    type: 'POST',
+                    data: {
+                        action: 'stma_get_marketing_analysis',
+                        nonce: '<?php echo wp_create_nonce('stma_marketing_advisor_nonce'); ?>'
+                    },
+                    success: function(response) {
+                        if (response.success) {
+                            $resultsContent.html(response.data.analysis).hide().fadeIn();
+                        } else {
+                            var errorMessage = '<p><strong>Errore durante l'analisi:</strong> ' + (response.data.message || 'Errore sconosciuto.') + '</p>';
+                            $errorContainer.html(errorMessage).show();
+                            $resultsContent.html('');
+                        }
+                    },
+                    error: function(jqXHR, textStatus, errorThrown) {
+                        var errorMessage = '<p><strong>Errore di comunicazione (AJAX):</strong> ' + textStatus + ' - ' + errorThrown + '</p>';
+                        $errorContainer.html(errorMessage).show();
+                        $resultsContent.html('');
+                    },
+                    complete: function() {
+                        $loader.hide();
+                        $button.prop('disabled', false).html('<span class="dashicons dashicons-analytics"></span> Avvia Analisi Strategica');
+                    }
+                });
+            });
+        });
+    </script>
+    <?php
+}
+
+/**
+ * Funzione handler per la chiamata AJAX che esegue l'analisi di marketing.
+ */
+function stma_get_marketing_analysis_ajax() {
+    check_ajax_referer('stma_marketing_advisor_nonce', 'nonce');
+
+    $openai_api_key = defined('OPENAI_API_KEY') ? OPENAI_API_KEY : '';
+    $trello_api_key = defined('TRELLO_API_KEY') ? TRELLO_API_KEY : '';
+    $trello_api_token = defined('TRELLO_API_TOKEN') ? TRELLO_API_TOKEN : '';
+    $google_sheet_url = defined('MARKETING_COSTS_GOOGLE_SHEET_URL') ? MARKETING_COSTS_GOOGLE_SHEET_URL : '';
+
+    if (empty($openai_api_key) || empty($trello_api_key) || empty($trello_api_token) || empty($google_sheet_url)) {
+        wp_send_json_error(['message' => 'Una o più chiavi API o l\'URL del Google Sheet non sono definite in wp-config.php.']);
+        return;
+    }
+
+    $marketing_costs = stma_get_google_sheet_data($google_sheet_url);
+    if (is_wp_error($marketing_costs)) {
+        wp_send_json_error(['message' => 'Recupero dati da Google Sheets fallito: ' . $marketing_costs->get_error_message()]);
+        return;
+    }
+
+    $trello_leads = stma_get_trello_leads_for_period($trello_api_key, $trello_api_token);
+     if (is_wp_error($trello_leads)) {
+        wp_send_json_error(['message' => 'Recupero lead da Trello fallito: ' . $trello_leads->get_error_message()]);
+        return;
+    }
+
+    if (empty($trello_leads)) {
+        wp_send_json_success(['analysis' => '<h3>Nessun Nuovo Lead</h3><p>Nessun nuovo lead trovato negli ultimi 7 giorni. L\'analisi non può continuare.</p>']);
+        return;
+    }
+
+    $card_ids = wp_list_pluck($trello_leads, 'id');
+    $predictions = stma_get_predictions_for_cards($card_ids);
+    if (is_wp_error($predictions)) {
+        wp_send_json_error(['message' => 'Recupero previsioni fallito: ' . $predictions->get_error_message()]);
+        return;
+    }
+
+    $aggregated_data = [];
+    foreach ($marketing_costs as $channel => $costs) {
+        $aggregated_data[trim($channel)] = [
+            'costo_totale' => $costs['costo'], 'numero_lead' => 0, 'lead_con_previsione' => 0, 'somma_probabilita' => 0.0,
+        ];
+    }
+
+    foreach ($trello_leads as $lead) {
+        $provenance = trim($lead['provenance']);
+        if (isset($aggregated_data[$provenance])) {
+            $aggregated_data[$provenance]['numero_lead']++;
+            if (isset($predictions[$lead['id']])) {
+                 $aggregated_data[$provenance]['lead_con_previsione']++;
+                 $aggregated_data[$provenance]['somma_probabilita'] += (float)$predictions[$lead['id']];
+            }
+        }
+    }
+
+    $summary_for_ai = [];
+    $total_budget = array_sum(wp_list_pluck($marketing_costs, 'costo'));
+    foreach ($aggregated_data as $channel => $data) {
+        if ($data['numero_lead'] > 0) {
+            $cpl = $data['costo_totale'] / $data['numero_lead'];
+            $avg_quality = ($data['lead_con_previsione'] > 0) ? ($data['somma_probabilita'] / $data['lead_con_previsione']) * 100 : 0;
+            $summary_for_ai[$channel] = [
+                'costo_canale' => $data['costo_totale'], 'costo_per_lead' => round($cpl, 2),
+                'qualita_media_lead_percentuale' => round($avg_quality, 2), 'numero_lead_generati' => $data['numero_lead']
+            ];
+        } else {
+             $summary_for_ai[$channel] = [
+                'costo_canale' => $data['costo_totale'], 'costo_per_lead' => 'N/A',
+                'qualita_media_lead_percentuale' => 'N/A', 'numero_lead_generati' => 0
+            ];
+        }
+    }
+
+    if (empty($summary_for_ai)) {
+        wp_send_json_error(['message' => 'Nessun dato aggregato da analizzare. Controlla la corrispondenza tra i canali su Google Sheet e la provenienza dei lead su Trello.']);
+        return;
+    }
+
+    $prompt = "Sei un consulente di marketing strategico per un'azienda italiana. Analizza i dati di performance dei canali di marketing degli ultimi 7 giorni (budget totale speso: {$total_budget} EUR) e fornisci consigli pratici su come riallocare il budget per la prossima settimana. La 'qualità lead' è una stima della probabilità di chiusura.
+
+Regole:
+- Rispondi in italiano, con formato HTML (`<h3>`, `<p>`, `<ul>`, `<li>`, `<strong>`).
+- Inizia con `<h3>Analisi Generale</h3>`.
+- Prosegui con `<h3>Raccomandazioni per Canale</h3>`, analizzando ogni canale.
+- Concludi con `<h3>Proposta di Allocazione Budget</h3>`, fornendo chiare percentuali di riallocazione.
+- Sii diretto, pratico e orientato all'azione.
+
+Dati da analizzare:
+" . json_encode($summary_for_ai, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+
+    $ai_response = stma_call_openai_api($prompt, $openai_api_key);
+    if (is_wp_error($ai_response)) {
+        wp_send_json_error(['message' => 'Chiamata a OpenAI fallita: ' . $ai_response->get_error_message()]);
+        return;
+    }
+
+    wp_send_json_success(['analysis' => $ai_response]);
+}
+add_action('wp_ajax_stma_get_marketing_analysis', 'stma_get_marketing_analysis_ajax');
+
+function get_trello_card_details($card_id, $api_key, $api_token) {
+    $url = "https://api.trello.com/1/cards/{$card_id}?customFieldItems=true&key={$api_key}&token={$api_token}";
+    $response = wp_remote_get($url, ['timeout' => 20]);
+    if (is_wp_error($response)) return $response;
+    return json_decode(wp_remote_retrieve_body($response), true);
+}
+
+function get_trello_board_custom_fields($board_ids, $api_key, $api_token) {
+    if (!is_array($board_ids)) $board_ids = [$board_ids];
+    $all_fields = [];
+    foreach ($board_ids as $board_id) {
+        $url = "https://api.trello.com/1/boards/{$board_id}/customFields?key={$api_key}&token={$api_token}";
+        $response = wp_remote_get($url, ['timeout' => 20]);
+        if (!is_wp_error($response)) {
+            $fields = json_decode(wp_remote_retrieve_body($response), true);
+            if (is_array($fields)) $all_fields[$board_id] = $fields;
+        }
+    }
+    return $all_fields;
+}
+
+function stma_get_google_sheet_data($sheet_url) {
+    if (empty($sheet_url)) return new WP_Error('missing_url', 'L\'URL del Google Sheet non è configurato.');
+    $response = wp_remote_get($sheet_url, ['timeout' => 30]);
+    if (is_wp_error($response)) return new WP_Error('request_failed', 'Impossibile contattare Google Sheet: ' . $response->get_error_message());
+    $body = wp_remote_retrieve_body($response);
+    if (empty($body)) return new WP_Error('empty_response', 'Il Google Sheet ha restituito una risposta vuota.');
+
+    $lines = explode("\n", trim($body));
+    $header = str_getcsv(array_shift($lines));
+    $data = [];
+    $channel_key = array_search('Canale', $header);
+    $cost_key = array_search('Costo', $header);
+
+    if ($channel_key === false || $cost_key === false) return new WP_Error('invalid_header', 'L\'header del CSV deve contenere "Canale" e "Costo".');
+
+    foreach ($lines as $line) {
+        if (empty(trim($line))) continue;
+        $row = str_getcsv($line);
+        if (isset($row[$channel_key]) && isset($row[$cost_key])) {
+            $channel = trim($row[$channel_key]);
+            $cost = str_replace([',', '€', ' '], ['.', '', ''], $row[$cost_key]);
+            if (!empty($channel) && is_numeric($cost)) $data[$channel] = ['costo' => (float)$cost];
+        }
+    }
+    if (empty($data)) return new WP_Error('no_data_parsed', 'Nessun dato valido trovato nel CSV.');
+    return $data;
+}
+
+function stma_get_trello_leads_for_period($api_key, $api_token) {
+    $all_user_boards = get_trello_boards($api_key, $api_token);
+    if (is_wp_error($all_user_boards) || empty($all_user_boards)) return new WP_Error('no_boards', 'Nessuna bacheca Trello trovata.');
+
+    $board_ids = wp_list_pluck($all_user_boards, 'id');
+    $provenance_map = wp_trello_get_provenance_field_ids_map($board_ids, $api_key, $api_token);
+    $all_custom_fields_defs = get_trello_board_custom_fields(array_keys($provenance_map), $api_key, $api_token);
+    $seven_days_ago_timestamp = strtotime('-7 days');
+    $recent_leads = [];
+
+    global $wpdb;
+    $cache_table = defined('STPA_CARDS_CACHE_TABLE') ? STPA_CARDS_CACHE_TABLE : $wpdb->prefix . 'stpa_cards_cache';
+
+    foreach ($board_ids as $board_id) {
+        $cards_from_db = $wpdb->get_results($wpdb->prepare("SELECT card_id, card_name FROM {$cache_table} WHERE board_id = %s AND is_numeric_name = 1", $board_id), ARRAY_A);
+        if (empty($cards_from_db)) continue;
+
+        foreach ($cards_from_db as $card_data) {
+            if ((int) hexdec(substr($card_data['card_id'], 0, 8)) < $seven_days_ago_timestamp) continue;
+
+            $card_details = get_trello_card_details($card_data['card_id'], $api_key, $api_token);
+            if (is_wp_error($card_details) || empty($card_details)) continue;
+
+            $provenance = 'Sconosciuta';
+            if (isset($provenance_map[$board_id]) && !empty($card_details['customFieldItems'])) {
+                $provenance_field_id = $provenance_map[$board_id];
+                foreach ($card_details['customFieldItems'] as $field) {
+                    if ($field['idCustomField'] !== $provenance_field_id || !isset($field['idValue'])) continue;
+
+                    if (isset($all_custom_fields_defs[$board_id])) {
+                        foreach ($all_custom_fields_defs[$board_id] as $def) {
+                            if ($def['id'] === $provenance_field_id && isset($def['options'])) {
+                                foreach ($def['options'] as $option) {
+                                    if ($option['id'] === $field['idValue']) {
+                                        $provenance = $option['value']['text'];
+                                        break 3;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            $recent_leads[] = ['id' => $card_data['card_id'], 'name' => $card_data['card_name'], 'provenance' => $provenance];
+        }
+    }
+    return $recent_leads;
+}
+
+function stma_get_predictions_for_cards($card_ids) {
+    global $wpdb;
+    if (empty($card_ids)) return [];
+    $results_table = $wpdb->prefix . 'stpa_analysis_results';
+    if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $results_table)) != $results_table) return new WP_Error('db_table_not_found', "Tabella `{$results_table}` non trovata.");
+
+    $placeholders = implode(', ', array_fill(0, count($card_ids), '%s'));
+    $results = $wpdb->get_results($wpdb->prepare("SELECT card_id, closing_probability FROM {$results_table} WHERE card_id IN ($placeholders)", $card_ids), OBJECT_K);
+    if ($wpdb->last_error) return new WP_Error('db_query_error', 'Query fallita: ' . $wpdb->last_error);
+
+    return wp_list_pluck($results, 'closing_probability');
+}
+
+function stma_call_openai_api($prompt, $api_key) {
+    $endpoint = 'https://api.openai.com/v1/chat/completions';
+    $body = ['model' => 'gpt-4o', 'messages' => [['role' => 'user', 'content' => $prompt]], 'temperature' => 0.5, 'max_tokens' => 1500];
+    $args = ['body' => json_encode($body), 'headers' => ['Content-Type' => 'application/json', 'Authorization' => 'Bearer ' . $api_key], 'timeout' => 120];
+    $response = wp_remote_post($endpoint, $args);
+
+    if (is_wp_error($response)) return new WP_Error('openai_request_failed', 'Richiesta a OpenAI fallita: ' . $response->get_error_message());
+    $response_body = json_decode(wp_remote_retrieve_body($response), true);
+    if (isset($response_body['error'])) return new WP_Error('openai_api_error', 'Errore API OpenAI: ' . $response_body['error']['message']);
+    if (empty($response_body['choices'][0]['message']['content'])) return new WP_Error('openai_empty_response', 'Risposta da OpenAI vuota o non valida.');
+
+    return $response_body['choices'][0]['message']['content'];
+}
+
+// ========= FINE MODULO MARKETING ADVISOR CONSOLIDATO =========
 
 // Aggiunge il dashboard alla pagina principale del plugin
 //add_action('wp_trello_plugin_page_end', 'stpa_display_dashboard_hook');
