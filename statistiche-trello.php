@@ -97,7 +97,7 @@ function stma_render_advisor_page() {
                         if (response.success) {
                             $resultsContent.html(response.data.analysis).hide().fadeIn();
                         } else {
-                            var errorMessage = '<p><strong>Errore durante l'analisi:</strong> ' + (response.data.message || 'Errore sconosciuto.') + '</p>';
+                            var errorMessage = '<p><strong>Errore durante l\'analisi:</strong> ' + (response.data.message || 'Errore sconosciuto.') + '</p>';
                             $errorContainer.html(errorMessage).show();
                             $resultsContent.html('');
                         }
@@ -124,70 +124,98 @@ function stma_render_advisor_page() {
 function stma_get_marketing_analysis_ajax() {
     check_ajax_referer('stma_marketing_advisor_nonce', 'nonce');
 
+    // Recupera le chiavi API necessarie
     $openai_api_key = defined('OPENAI_API_KEY') ? OPENAI_API_KEY : '';
     $trello_api_key = defined('TRELLO_API_KEY') ? TRELLO_API_KEY : '';
     $trello_api_token = defined('TRELLO_API_TOKEN') ? TRELLO_API_TOKEN : '';
-    $google_sheet_url = defined('MARKETING_COSTS_GOOGLE_SHEET_URL') ? MARKETING_COSTS_GOOGLE_SHEET_URL : '';
 
-    if (empty($openai_api_key) || empty($trello_api_key) || empty($trello_api_token) || empty($google_sheet_url)) {
-        wp_send_json_error(['message' => 'Una o più chiavi API o l\'URL del Google Sheet non sono definite in wp-config.php.']);
+    if (empty($openai_api_key) || empty($trello_api_key) || empty($trello_api_token)) {
+        wp_send_json_error(['message' => 'Una o più chiavi API (OpenAI, Trello) non sono definite in wp-config.php.']);
         return;
     }
 
-    $marketing_costs = stma_get_google_sheet_data($google_sheet_url);
-    if (is_wp_error($marketing_costs)) {
-        wp_send_json_error(['message' => 'Recupero dati da Google Sheets fallito: ' . $marketing_costs->get_error_message()]);
+    // 1. Ottieni i dati di marketing dalla fonte dati esistente
+    if (!function_exists('wp_trello_get_marketing_data_with_leads_costs_v19')) {
+        wp_send_json_error(['message' => 'La funzione per recuperare i dati di marketing (`wp_trello_get_marketing_data_with_leads_costs_v19`) non è disponibile.']);
+        return;
+    }
+    $all_marketing_data = wp_trello_get_marketing_data_with_leads_costs_v19();
+
+    // Il Marketing Advisor analizza i dati più recenti. Usiamo i costi della settimana corrente o dell'ultima settimana disponibile.
+    $current_iso_week = date('o-\WW');
+    $marketing_costs_for_period = null;
+    if (isset($all_marketing_data[$current_iso_week]['costs'])) {
+        $marketing_costs_for_period = $all_marketing_data[$current_iso_week]['costs'];
+    } elseif (!empty($all_marketing_data)) {
+        $latest_week_key = array_key_last($all_marketing_data);
+        if(isset($all_marketing_data[$latest_week_key]['costs'])) {
+            $marketing_costs_for_period = $all_marketing_data[$latest_week_key]['costs'];
+        }
+    }
+
+    if (empty($marketing_costs_for_period)) {
+        wp_send_json_error(['message' => 'Nessun dato sui costi di marketing trovato per il periodo recente. Controlla la fonte dati (Google Sheet).']);
         return;
     }
 
+    // 2. Ottieni i lead da Trello degli ultimi 7 giorni
     $trello_leads = stma_get_trello_leads_for_period($trello_api_key, $trello_api_token);
-     if (is_wp_error($trello_leads)) {
-        wp_send_json_error(['message' => 'Recupero lead da Trello fallito: ' . $trello_leads->get_error_message()]);
+    if (is_wp_error($trello_leads)) {
+        wp_send_json_error(['message' => 'Errore nel recupero dei lead da Trello: ' . $trello_leads->get_error_message()]);
         return;
     }
 
-    if (empty($trello_leads)) {
-        wp_send_json_success(['analysis' => '<h3>Nessun Nuovo Lead</h3><p>Nessun nuovo lead trovato negli ultimi 7 giorni. L\'analisi non può continuare.</p>']);
-        return;
-    }
-
+    // 3. Ottieni le previsioni per le schede Trello
     $card_ids = wp_list_pluck($trello_leads, 'id');
-    $predictions = stma_get_predictions_for_cards($card_ids);
+    $predictions = !empty($card_ids) ? stma_get_predictions_for_cards($card_ids) : [];
     if (is_wp_error($predictions)) {
-        wp_send_json_error(['message' => 'Recupero previsioni fallito: ' . $predictions->get_error_message()]);
+        wp_send_json_error(['message' => 'Errore nel recupero delle previsioni: ' . $predictions->get_error_message()]);
         return;
     }
 
+    // 4. Mappa la "Provenienza" di Trello ai nomi interni delle piattaforme usate nel CSV
+    $provenance_to_internal_platform_map = [
+        'iol' => 'italiaonline', 'chiamate' => 'chiamate', 'Organic Search' => 'organico',
+        'taormina' => 'taormina', 'fb' => 'facebook', 'Google Ads' => 'google ads',
+        'Subito' => 'subito', 'poolindustriale.it' => 'pool industriale', 'archiexpo' => 'archiexpo',
+        'Bakeka' => 'bakeka', 'Europage' => 'europage',
+    ];
+
+    // 5. Aggrega i dati
     $aggregated_data = [];
-    foreach ($marketing_costs as $channel => $costs) {
-        $aggregated_data[trim($channel)] = [
-            'costo_totale' => $costs['costo'], 'numero_lead' => 0, 'lead_con_previsione' => 0, 'somma_probabilita' => 0.0,
-        ];
+    foreach ($marketing_costs_for_period as $internal_platform => $cost) {
+        $aggregated_data[$internal_platform] = ['costo_totale' => $cost, 'numero_lead' => 0, 'lead_con_previsione' => 0, 'somma_probabilita' => 0.0];
     }
 
-    foreach ($trello_leads as $lead) {
-        $provenance = trim($lead['provenance']);
-        if (isset($aggregated_data[$provenance])) {
-            $aggregated_data[$provenance]['numero_lead']++;
-            if (isset($predictions[$lead['id']])) {
-                 $aggregated_data[$provenance]['lead_con_previsione']++;
-                 $aggregated_data[$provenance]['somma_probabilita'] += (float)$predictions[$lead['id']];
+    if (!empty($trello_leads)) {
+        foreach ($trello_leads as $lead) {
+            $provenance = trim($lead['provenance']);
+            $internal_platform = $provenance_to_internal_platform_map[$provenance] ?? null;
+
+            if ($internal_platform && isset($aggregated_data[$internal_platform])) {
+                $aggregated_data[$internal_platform]['numero_lead']++;
+                if (isset($predictions[$lead['id']])) {
+                     $aggregated_data[$internal_platform]['lead_con_previsione']++;
+                     $aggregated_data[$internal_platform]['somma_probabilita'] += (float)$predictions[$lead['id']];
+                }
             }
         }
     }
 
+    // 6. Prepara il riassunto per l'AI
     $summary_for_ai = [];
-    $total_budget = array_sum(wp_list_pluck($marketing_costs, 'costo'));
-    foreach ($aggregated_data as $channel => $data) {
+    $total_budget = array_sum($marketing_costs_for_period);
+    foreach ($aggregated_data as $platform => $data) {
+        $display_name = array_search($platform, $provenance_to_internal_platform_map) ?: ucfirst($platform);
         if ($data['numero_lead'] > 0) {
             $cpl = $data['costo_totale'] / $data['numero_lead'];
             $avg_quality = ($data['lead_con_previsione'] > 0) ? ($data['somma_probabilita'] / $data['lead_con_previsione']) * 100 : 0;
-            $summary_for_ai[$channel] = [
+            $summary_for_ai[$display_name] = [
                 'costo_canale' => $data['costo_totale'], 'costo_per_lead' => round($cpl, 2),
                 'qualita_media_lead_percentuale' => round($avg_quality, 2), 'numero_lead_generati' => $data['numero_lead']
             ];
         } else {
-             $summary_for_ai[$channel] = [
+             $summary_for_ai[$display_name] = [
                 'costo_canale' => $data['costo_totale'], 'costo_per_lead' => 'N/A',
                 'qualita_media_lead_percentuale' => 'N/A', 'numero_lead_generati' => 0
             ];
@@ -195,11 +223,12 @@ function stma_get_marketing_analysis_ajax() {
     }
 
     if (empty($summary_for_ai)) {
-        wp_send_json_error(['message' => 'Nessun dato aggregato da analizzare. Controlla la corrispondenza tra i canali su Google Sheet e la provenienza dei lead su Trello.']);
+        wp_send_json_error(['message' => 'Nessun dato aggregato da analizzare.']);
         return;
     }
 
-    $prompt = "Sei un consulente di marketing strategico per un'azienda italiana. Analizza i dati di performance dei canali di marketing degli ultimi 7 giorni (budget totale speso: {$total_budget} EUR) e fornisci consigli pratici su come riallocare il budget per la prossima settimana. La 'qualità lead' è una stima della probabilità di chiusura.
+    // 7. Costruisci il prompt per OpenAI e invia la richiesta
+    $prompt = "Sei un consulente di marketing strategico per un'azienda italiana. Analizza i dati di performance dei canali di marketing del periodo più recente (budget totale speso: {$total_budget} EUR) e fornisci consigli pratici su come riallocare il budget per la prossima settimana. La 'qualità lead' è una stima della probabilità di chiusura.
 
 Regole:
 - Rispondi in italiano, con formato HTML (`<h3>`, `<p>`, `<ul>`, `<li>`, `<strong>`).
@@ -240,34 +269,6 @@ function get_trello_board_custom_fields($board_ids, $api_key, $api_token) {
         }
     }
     return $all_fields;
-}
-
-function stma_get_google_sheet_data($sheet_url) {
-    if (empty($sheet_url)) return new WP_Error('missing_url', 'L\'URL del Google Sheet non è configurato.');
-    $response = wp_remote_get($sheet_url, ['timeout' => 30]);
-    if (is_wp_error($response)) return new WP_Error('request_failed', 'Impossibile contattare Google Sheet: ' . $response->get_error_message());
-    $body = wp_remote_retrieve_body($response);
-    if (empty($body)) return new WP_Error('empty_response', 'Il Google Sheet ha restituito una risposta vuota.');
-
-    $lines = explode("\n", trim($body));
-    $header = str_getcsv(array_shift($lines));
-    $data = [];
-    $channel_key = array_search('Canale', $header);
-    $cost_key = array_search('Costo', $header);
-
-    if ($channel_key === false || $cost_key === false) return new WP_Error('invalid_header', 'L\'header del CSV deve contenere "Canale" e "Costo".');
-
-    foreach ($lines as $line) {
-        if (empty(trim($line))) continue;
-        $row = str_getcsv($line);
-        if (isset($row[$channel_key]) && isset($row[$cost_key])) {
-            $channel = trim($row[$channel_key]);
-            $cost = str_replace([',', '€', ' '], ['.', '', ''], $row[$cost_key]);
-            if (!empty($channel) && is_numeric($cost)) $data[$channel] = ['costo' => (float)$cost];
-        }
-    }
-    if (empty($data)) return new WP_Error('no_data_parsed', 'Nessun dato valido trovato nel CSV.');
-    return $data;
 }
 
 function stma_get_trello_leads_for_period($api_key, $api_token) {
