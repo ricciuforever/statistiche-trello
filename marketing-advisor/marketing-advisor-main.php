@@ -16,7 +16,7 @@ require_once plugin_dir_path(__FILE__) . 'marketing-advisor-ajax.php';
  */
 function stma_add_submenu_page() {
     add_submenu_page(
-        'statistiche-trello', // Slug del menu genitore
+        'wp-trello-plugin', // Slug del menu genitore CORRETTO
         'Marketing Advisor',       // Titolo della pagina
         'Marketing Advisor',       // Titolo del menu
         'manage_options',          // Capability richiesta
@@ -30,7 +30,7 @@ add_action('admin_menu', 'stma_add_submenu_page');
  * Carica gli script e gli stili solo per la pagina del Marketing Advisor.
  */
 function stma_enqueue_assets($hook) {
-    // L'hook per una pagina di sottomenù è '{parent_slug}_page_{sub_slug}'
+    // L'hook per una pagina di sottomenù è '{parent_slug}_page_{submenu_slug}'
     if ($hook != 'wp-trello-plugin_page_stma-marketing-advisor') {
         return;
     }
