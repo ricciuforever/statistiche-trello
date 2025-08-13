@@ -90,6 +90,16 @@ function wp_trello_plugin_menu() {
         'wtqsg-quotes-sheet',               // Slug univoco per questa pagina
         'wtqsg_render_quotes_sheet_page'    // Funzione che mostrerà la pagina
     );
+
+    // Aggiunto il sottomenù del Marketing Advisor qui
+    add_submenu_page(
+        'wp-trello-plugin',
+        'Marketing Advisor',
+        '🤖 Marketing Advisor',
+        'manage_options',
+        'stma-marketing-advisor',
+        'stma_render_advisor_page'
+    );
 }
 
 
