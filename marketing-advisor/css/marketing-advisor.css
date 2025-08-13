@@ -1,0 +1,10 @@
+/* Stili per il modulo Marketing Advisor */
+#stma-results-container .updated,
+#stma-results-container .error {
+    padding: 15px;
+    border-left-width: 4px;
+}
+
+#stma-results-container .uk-card {
+    margin-top: 20px;
+}
