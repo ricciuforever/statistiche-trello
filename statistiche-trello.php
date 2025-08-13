@@ -323,7 +323,8 @@ function stma_get_trello_leads_for_period($api_key, $api_token) {
 function stma_get_predictions_for_cards($card_ids) {
     global $wpdb;
     if (empty($card_ids)) return [];
-    $results_table = $wpdb->prefix . 'stpa_analysis_results';
+    // FIX: Use the correct table name defined in the constants
+    $results_table = STPA_RESULTS_TABLE;
     if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $results_table)) != $results_table) return new WP_Error('db_table_not_found', "Tabella `{$results_table}` non trovata.");
 
     $placeholders = implode(', ', array_fill(0, count($card_ids), '%s'));
