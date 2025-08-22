@@ -250,3 +250,35 @@ function stma_call_openai_api($prompt_text, $response_format = 'json_object') {
 
     return $content;
 }
+
+function stma_get_predictions_for_period($start_date, $end_date) {
+    global $wpdb;
+    $results_table = 'wpmq_stpa_predictive_results';
+    if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $results_table)) != $results_table) { return new WP_Error('db_table_not_found', "Tabella dei risultati '{$results_table}' non trovata."); }
+    $query = $wpdb->prepare("SELECT card_id, probability, period FROM {$results_table} WHERE created_at >= %s AND created_at <= %s AND card_id REGEXP '^[a-f0-9]{24}$'", $start_date->format('Y-m-d H:i:s'), $end_date->format('Y-m-d H:i:s'));
+    $results = $wpdb->get_results($query, ARRAY_A);
+    if ($wpdb->last_error) { return new WP_Error('db_query_error', 'Query fallita: ' . $wpdb->last_error); }
+    $latest_short_term_predictions = [];
+    foreach ($results as $row) {
+        $card_id = $row['card_id']; $period = (int)$row['period']; $probability = (float)$row['probability'];
+        if (!isset($latest_short_term_predictions[$card_id]) || $period < $latest_short_term_predictions[$card_id]['period']) {
+            $latest_short_term_predictions[$card_id] = ['probability' => $probability, 'period' => $period];
+        }
+    }
+    return array_map(function($p) { return $p['probability']; }, $latest_short_term_predictions);
+}
+
+function stma_get_trello_details_for_cards($card_ids) {
+    if (empty($card_ids)) return [];
+    global $wpdb;
+    $cache_table = defined('STPA_CARDS_CACHE_TABLE') ? STPA_CARDS_CACHE_TABLE : $wpdb->prefix . 'stpa_cards_cache';
+    $trello_details = [];
+    $placeholders = implode(', ', array_fill(0, count($card_ids), '%s'));
+    $results = $wpdb->get_results($wpdb->prepare("SELECT card_id, provenance FROM {$cache_table} WHERE card_id IN ($placeholders)", $card_ids), OBJECT_K);
+    if (!empty($results)) {
+        foreach ($results as $card_id => $data) {
+            $trello_details[$card_id] = ['provenance' => $data->provenance];
+        }
+    }
+    return $trello_details;
+}

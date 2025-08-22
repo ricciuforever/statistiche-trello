@@ -182,7 +182,7 @@ function stma_get_marketing_analysis_ajax() {
     set_time_limit(300);
     check_ajax_referer('stma_marketing_advisor_nonce', 'nonce');
 
-    
+
     // =========================================================================
     // ==> CORREZIONE 2: Controlla se la funzione per prendere i dati esiste prima di chiamarla.
     if (!function_exists('wp_trello_get_marketing_data_with_leads_costs_v19')) {
@@ -212,25 +212,25 @@ function stma_get_marketing_analysis_ajax() {
             foreach ($week_data['costs'] as $p => $c) { $marketing_costs[$p] = ($marketing_costs[$p] ?? 0) + $c; }
         }
     }
-    
+
     $predictions = stma_get_predictions_for_period($start_date, $end_date);
     if (is_wp_error($predictions)) {
         wp_send_json_error(['message' => $predictions->get_error_message()]);
         return;
     }
-    
+
     $card_ids_with_predictions = array_keys($predictions);
-    
+
     $trello_details = stma_get_trello_details_for_cards($card_ids_with_predictions);
 
     $provenance_to_internal_platform_map = ['iol' => 'italiaonline', 'chiamate' => 'chiamate', 'Organic Search' => 'organico', 'taormina' => 'taormina', 'fb' => 'facebook', 'Google Ads' => 'google ads', 'Subito' => 'subito', 'poolindustriale.it' => 'pool industriale', 'archiexpo' => 'archiexpo', 'Bakeka' => 'bakeka', 'Europage' => 'europage'];
     $aggregated_data = [];
-    
+
     $all_platforms = array_unique(array_merge(array_values($provenance_to_internal_platform_map), array_keys($marketing_costs)));
     foreach ($all_platforms as $internal_platform) {
         $aggregated_data[$internal_platform] = [ 'costo_totale' => $marketing_costs[$internal_platform] ?? 0, 'numero_lead' => 0, 'somma_probabilita' => 0.0, 'lead_con_previsione' => 0 ];
     }
-    
+
     foreach ($predictions as $card_id => $probability) {
         if (!isset($trello_details[$card_id])) continue;
         $provenance = $trello_details[$card_id]['provenance'];
@@ -244,7 +244,7 @@ function stma_get_marketing_analysis_ajax() {
             $aggregated_data[$internal_platform]['lead_con_previsione']++;
         }
     }
-    
+
     $total_cost_incurred = array_sum(array_column($aggregated_data, 'costo_totale'));
     $average_weekly_budget = round($total_cost_incurred / $weeks_in_period, 2);
 
@@ -256,7 +256,7 @@ function stma_get_marketing_analysis_ajax() {
         $avg_quality = ($data['lead_con_previsione'] > 0) ? round(($data['somma_probabilita'] / $data['lead_con_previsione']) * 100, 2) : 'N/A';
         $summary_for_ai[$display_name] = ['costo_canale' => $data['costo_totale'], 'costo_per_lead' => $cpl, 'qualita_media_lead_percentuale' => $avg_quality, 'numero_lead_generati' => $data['numero_lead']];
     }
-    
+
     $prompt = "Sei un consulente di marketing strategico per un'azienda italiana. Nel periodo selezionato, non ci sono dati di spesa o lead generati. Fornisci raccomandazioni strategiche su come iniziare a investire un budget ipotetico (es. 1000€) per raccogliere dati utili. Rispondi in italiano, con formato HTML (`<h3>`, `<p>`, `<ul>`, `<li>`, `<strong>`).";
     if (!empty($summary_for_ai)) {
         $json_summary_for_ai = json_encode($summary_for_ai, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
@@ -364,38 +364,3 @@ PROMPT; // Ho abbreviato per leggibilità
     }
 }
 add_action('wp_ajax_stma_get_marketing_analysis', 'stma_get_marketing_analysis_ajax');
-
-
-// ... IL RESTO DELLE FUNZIONI HELPER RIMANE INVARIATO ...
-
-function stma_get_predictions_for_period($start_date, $end_date) {
-    global $wpdb;
-    $results_table = 'wpmq_stpa_predictive_results';
-    if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $results_table)) != $results_table) { return new WP_Error('db_table_not_found', "Tabella dei risultati '{$results_table}' non trovata."); }
-    $query = $wpdb->prepare("SELECT card_id, probability, period FROM {$results_table} WHERE created_at >= %s AND created_at <= %s AND card_id REGEXP '^[a-f0-9]{24}$'", $start_date->format('Y-m-d H:i:s'), $end_date->format('Y-m-d H:i:s'));
-    $results = $wpdb->get_results($query, ARRAY_A);
-    if ($wpdb->last_error) { return new WP_Error('db_query_error', 'Query fallita: ' . $wpdb->last_error); }
-    $latest_short_term_predictions = [];
-    foreach ($results as $row) {
-        $card_id = $row['card_id']; $period = (int)$row['period']; $probability = (float)$row['probability'];
-        if (!isset($latest_short_term_predictions[$card_id]) || $period < $latest_short_term_predictions[$card_id]['period']) {
-            $latest_short_term_predictions[$card_id] = ['probability' => $probability, 'period' => $period];
-        }
-    }
-    return array_map(function($p) { return $p['probability']; }, $latest_short_term_predictions);
-}
-
-function stma_get_trello_details_for_cards($card_ids) {
-    if (empty($card_ids)) return [];
-    global $wpdb;
-    $cache_table = defined('STPA_CARDS_CACHE_TABLE') ? STPA_CARDS_CACHE_TABLE : $wpdb->prefix . 'stpa_cards_cache';
-    $trello_details = [];
-    $placeholders = implode(', ', array_fill(0, count($card_ids), '%s'));
-    $results = $wpdb->get_results($wpdb->prepare("SELECT card_id, provenance FROM {$cache_table} WHERE card_id IN ($placeholders)", $card_ids), OBJECT_K);
-    if (!empty($results)) {
-        foreach ($results as $card_id => $data) {
-            $trello_details[$card_id] = ['provenance' => $data->provenance];
-        }
-    }
-    return $trello_details;
-}
