@@ -266,8 +266,8 @@ function stsg_send_marketing_advisor_report() {
     $report_data = stsg_get_marketing_advisor_report_data();
     if (is_wp_error($report_data)) return $report_data;
     $html_content = stsg_format_marketing_advisor_data_as_html($report_data);
-    $subject = "Report Marketing Advisor: Analisi e Raccomandazioni";
-    $message = "<html><body style='font-family: sans-serif;'><h1>Report Marketing Advisor</h1><p>Di seguito l'analisi delle performance di marketing degli ultimi 7 giorni e le raccomandazioni per l'ottimizzazione del budget.</p>" . $html_content . "</body></html>";
+    $subject = "Report Marketing Advisor: Analisi e Raccomandazioni (Ultime 4 Settimane)";
+    $message = "<html><body style='font-family: sans-serif;'><h1>Report Marketing Advisor</h1><p>Di seguito l'analisi delle performance di marketing delle ultime 4 settimane e le raccomandazioni per l'ottimizzazione del budget.</p>" . $html_content . "</body></html>";
     return wp_mail($recipients, $subject, $message, ['Content-Type: text/html; charset=UTF-8']);
 }
 
@@ -276,13 +276,56 @@ function stsg_send_marketing_advisor_report() {
 function stsg_get_predictive_analysis_report_data() {
     global $wpdb;
     $results_table = defined('STPA_RESULTS_TABLE') ? STPA_RESULTS_TABLE : $wpdb->prefix . 'stpa_predictive_results';
-    $queue_meta = get_option('stpa_queue_meta', false);
-    if (empty($queue_meta) || !isset($queue_meta['analysis_id'])) return new WP_Error('no_analysis_found', 'Nessuna analisi predittiva trovata.');
-    $analysis_id = $queue_meta['analysis_id'];
-    $analysis_date = isset($queue_meta['finished_at']) ? date('d/m/Y H:i', strtotime($queue_meta['finished_at'])) : 'N/A';
-    $query = $wpdb->prepare("SELECT card_name, card_url, probability, period FROM {$results_table} WHERE analysis_id = %s AND probability > 0.75 ORDER BY probability DESC", $analysis_id);
+    $analysis_id = null;
+    $analysis_date = 'N/A';
+
+    // 1. Prova a ottenere l'ID dall'opzione stabile dell'ultima analisi completata
+    $analysis_id = get_option('stpa_last_completed_analysis_id', null);
+
+    // 2. Se fallisce, prova con la meta-coda (potrebbe essere di un'analisi in corso o fallita)
+    if (empty($analysis_id)) {
+        $queue_meta = get_option('stpa_queue_meta', false);
+        if (!empty($queue_meta) && isset($queue_meta['analysis_id'])) {
+            $analysis_id = $queue_meta['analysis_id'];
+            if(isset($queue_meta['finished_at'])) {
+                 $analysis_date = date('d/m/Y H:i', strtotime($queue_meta['finished_at']));
+            }
+        }
+    }
+
+    // 3. Come ultimo fallback, cerca l'ID più recente direttamente nel database
+    if (empty($analysis_id)) {
+        $latest_id = $wpdb->get_var("SELECT analysis_id FROM {$results_table} ORDER BY created_at DESC LIMIT 1");
+        if ($latest_id) {
+            $analysis_id = $latest_id;
+        }
+    }
+
+    if (empty($analysis_id)) {
+        return new WP_Error('no_analysis_found', 'Nessun ID di analisi predittiva valido trovato.');
+    }
+
+    // Se abbiamo trovato un ID ma non una data, cerchiamola
+    if ($analysis_date === 'N/A') {
+        $latest_date = $wpdb->get_var($wpdb->prepare("SELECT created_at FROM {$results_table} WHERE analysis_id = %s ORDER BY created_at DESC LIMIT 1", $analysis_id));
+        if ($latest_date) {
+            $analysis_date = date('d/m/Y H:i', strtotime($latest_date));
+        }
+    }
+
+    $query = $wpdb->prepare(
+        "SELECT card_name, card_url, probability, period
+         FROM {$results_table}
+         WHERE analysis_id = %s AND probability > 0.75
+         ORDER BY probability DESC",
+        $analysis_id
+    );
     $results = $wpdb->get_results($query, ARRAY_A);
-    if ($wpdb->last_error) return new WP_Error('db_query_error', 'Errore DB: ' . $wpdb->last_error);
+
+    if ($wpdb->last_error) {
+        return new WP_Error('db_query_error', 'Errore nella query al database: ' . $wpdb->last_error);
+    }
+
     return ['results' => $results, 'analysis_date' => $analysis_date];
 }
 
@@ -299,13 +342,31 @@ function stsg_format_predictive_data_as_table($data) {
 
 function stsg_get_marketing_advisor_report_data() {
     global $wpdb;
-    if (!function_exists('wp_trello_get_marketing_data_with_leads_costs_v19') || !function_exists('stma_call_openai_api')) return new WP_Error('missing_functions', 'Le funzioni del Marketing Advisor non sono disponibili.');
+    if (!function_exists('wp_trello_get_marketing_data_with_leads_costs_v19') || !function_exists('stma_create_advisor_prompt') || !function_exists('stma_call_openai_api')) {
+        return new WP_Error('missing_functions', 'Le funzioni del modulo Marketing Advisor non sono disponibili.');
+    }
+
     $provenance_map = ['iol' => 'italiaonline', 'chiamate' => 'chiamate', 'Organic Search' => 'organico', 'taormina' => 'taormina', 'fb' => 'facebook', 'Google Ads' => 'google ads', 'Subito' => 'subito', 'poolindustriale.it' => 'pool industriale', 'archiexpo' => 'archiexpo', 'Bakeka' => 'bakeka', 'Europage' => 'europage'];
+
+    // --- INIZIO MODIFICA: Aggregazione costi su 4 settimane ---
     $marketing_data = wp_trello_get_marketing_data_with_leads_costs_v19();
-    $current_iso_week = (new DateTime())->format("o-\WW");
-    $current_week_costs = $marketing_data[$current_iso_week]['costs'] ?? [];
-    $seven_days_ago = new DateTime('-7 days');
-    $trello_timestamp_7_days_ago = dechex($seven_days_ago->getTimestamp());
+    $four_weeks_costs = [];
+    $today = new DateTime('now', new DateTimeZone('Europe/Rome'));
+    for ($i = 0; $i < 4; $i++) {
+        $date_in_week = (clone $today)->modify("-$i weeks");
+        $iso_week = $date_in_week->format("o-\WW");
+        $week_costs = $marketing_data[$iso_week]['costs'] ?? [];
+        foreach ($week_costs as $channel => $cost) {
+            $four_weeks_costs[$channel] = ($four_weeks_costs[$channel] ?? 0) + $cost;
+        }
+    }
+    // --- FINE MODIFICA ---
+
+    // --- INIZIO MODIFICA: Recupero schede degli ultimi 28 giorni ---
+    $twenty_eight_days_ago = new DateTime('-28 days', new DateTimeZone('Europe/Rome'));
+    $trello_timestamp_28_days_ago = dechex($twenty_eight_days_ago->getTimestamp());
+    // --- FINE MODIFICA ---
+
     $apiKey = defined('TRELLO_API_KEY') ? TRELLO_API_KEY : '';
     $apiToken = defined('TRELLO_API_TOKEN') ? TRELLO_API_TOKEN : '';
     $all_boards = get_trello_boards($apiKey, $apiToken);
@@ -315,7 +376,7 @@ function stsg_get_marketing_advisor_report_data() {
     foreach ($board_ids as $board_id) {
         $cards = get_trello_cards($board_id, $apiKey, $apiToken);
         foreach ($cards as $card) {
-            if (hexdec(substr($card['id'], 0, 8)) >= $trello_timestamp_7_days_ago) $recent_cards[] = $card;
+            if (hexdec(substr($card['id'], 0, 8)) >= $trello_timestamp_28_days_ago) $recent_cards[] = $card;
         }
     }
     $card_ids = array_column($recent_cards, 'id');
@@ -330,7 +391,8 @@ function stsg_get_marketing_advisor_report_data() {
     }
     $channel_data = [];
     foreach ($provenance_map as $trello_prov => $internal_name) {
-        $channel_data[$trello_prov] = ['cost' => $current_week_costs[$internal_name] ?? 0, 'leads' => 0, 'quality_scores' => ['high' => 0, 'medium' => 0, 'low' => 0, 'unknown' => 0]];
+        // --- MODIFICA: Usa i costi aggregati su 4 settimane ---
+        $channel_data[$trello_prov] = ['cost' => $four_weeks_costs[$internal_name] ?? 0, 'leads' => 0, 'quality_scores' => ['high' => 0, 'medium' => 0, 'low' => 0, 'unknown' => 0]];
     }
     foreach ($recent_cards as $card) {
         $provenance = wp_trello_get_card_provenance($card, $board_provenance_ids_map) ?? 'N/D';
@@ -347,9 +409,11 @@ function stsg_get_marketing_advisor_report_data() {
     foreach ($channel_data as $name => $data) {
         if ($data['leads'] == 0 && $data['cost'] == 0) continue;
         $cpl = ($data['leads'] > 0) ? round($data['cost'] / $data['leads'], 2) : 0;
-        $data_for_prompt[] = ['canale' => $name, 'costo_settimanale' => $data['cost'], 'lead_generati' => $data['leads'], 'costo_per_lead' => $cpl, 'qualita_lead' => $data['quality_scores']];
+        // --- MODIFICA: Specifica nel prompt che i dati sono mensili ---
+        $data_for_prompt[] = ['canale' => $name, 'costo_mensile' => $data['cost'], 'lead_generati_nel_mese' => $data['leads'], 'costo_per_lead' => $cpl, 'qualita_lead' => $data['quality_scores']];
     }
-    if (empty($data_for_prompt)) return new WP_Error('no_marketing_data', 'Nessun dato di marketing o lead trovato per l\'ultima settimana.');
+    if (empty($data_for_prompt)) return new WP_Error('no_marketing_data', 'Nessun dato di marketing o lead trovato per le ultime 4 settimane.');
+
     $prompt = stma_create_advisor_prompt($data_for_prompt);
     return stma_call_openai_api($prompt);
 }
