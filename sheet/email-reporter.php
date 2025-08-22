@@ -341,85 +341,17 @@ function stsg_format_predictive_data_as_table($data) {
 }
 
 function stsg_get_marketing_advisor_report_data() {
-    global $wpdb;
+    // La funzione ora legge semplicemente l'ultimo risultato salvato.
+    $saved_results = get_option('stma_last_analysis_results');
 
-    // Assicura che il file con le funzioni helper sia caricato, specialmente in contesto cron
-    include_once(ABSPATH . 'wp-content/plugins/statistiche-trello/marketing-advisor/marketing-advisor-ajax.php');
-
-    if (!function_exists('wp_trello_get_marketing_data_with_leads_costs_v19') || !function_exists('stma_create_advisor_prompt') || !function_exists('stma_call_openai_api')) {
-        return new WP_Error('missing_functions', 'Le funzioni del modulo Marketing Advisor non sono disponibili.');
+    if (empty($saved_results)) {
+        return new WP_Error(
+            'no_advisor_analysis_found',
+            'Nessuna analisi del Marketing Advisor è stata ancora eseguita. Eseguire un\'analisi dalla pagina del Marketing Advisor prima di inviare il report.'
+        );
     }
 
-    $provenance_map = ['iol' => 'italiaonline', 'chiamate' => 'chiamate', 'Organic Search' => 'organico', 'taormina' => 'taormina', 'fb' => 'facebook', 'Google Ads' => 'google ads', 'Subito' => 'subito', 'poolindustriale.it' => 'pool industriale', 'archiexpo' => 'archiexpo', 'Bakeka' => 'bakeka', 'Europage' => 'europage'];
-
-    // --- INIZIO MODIFICA: Aggregazione costi su 4 settimane ---
-    $marketing_data = wp_trello_get_marketing_data_with_leads_costs_v19();
-    $four_weeks_costs = [];
-    $today = new DateTime('now', new DateTimeZone('Europe/Rome'));
-    for ($i = 0; $i < 4; $i++) {
-        $date_in_week = (clone $today)->modify("-$i weeks");
-        $iso_week = $date_in_week->format("o-\WW");
-        $week_costs = $marketing_data[$iso_week]['costs'] ?? [];
-        foreach ($week_costs as $channel => $cost) {
-            $four_weeks_costs[$channel] = ($four_weeks_costs[$channel] ?? 0) + $cost;
-        }
-    }
-    // --- FINE MODIFICA ---
-
-    // --- INIZIO MODIFICA: Recupero schede degli ultimi 28 giorni ---
-    $twenty_eight_days_ago = new DateTime('-28 days', new DateTimeZone('Europe/Rome'));
-    $trello_timestamp_28_days_ago = dechex($twenty_eight_days_ago->getTimestamp());
-    // --- FINE MODIFICA ---
-
-    $apiKey = defined('TRELLO_API_KEY') ? TRELLO_API_KEY : '';
-    $apiToken = defined('TRELLO_API_TOKEN') ? TRELLO_API_TOKEN : '';
-    $all_boards = get_trello_boards($apiKey, $apiToken);
-    $board_ids = array_column($all_boards, 'id');
-    $board_provenance_ids_map = wp_trello_get_provenance_field_ids_map($board_ids, $apiKey, $apiToken);
-    $recent_cards = [];
-    foreach ($board_ids as $board_id) {
-        $cards = get_trello_cards($board_id, $apiKey, $apiToken);
-        foreach ($cards as $card) {
-            if (hexdec(substr($card['id'], 0, 8)) >= $trello_timestamp_28_days_ago) $recent_cards[] = $card;
-        }
-    }
-    $card_ids = array_column($recent_cards, 'id');
-    $predictive_results = [];
-    if (!empty($card_ids)) {
-        $ids_placeholder = implode(', ', array_fill(0, count($card_ids), '%s'));
-        $results_table = $wpdb->prefix . 'stpa_predictive_results';
-        $db_results = $wpdb->get_results($wpdb->prepare("SELECT card_id, probability FROM $results_table WHERE card_id IN ($ids_placeholder) ORDER BY created_at DESC", $card_ids), ARRAY_A);
-        foreach ($db_results as $row) {
-            if (!isset($predictive_results[$row['card_id']])) $predictive_results[$row['card_id']] = (float)$row['probability'];
-        }
-    }
-    $channel_data = [];
-    foreach ($provenance_map as $trello_prov => $internal_name) {
-        // --- MODIFICA: Usa i costi aggregati su 4 settimane ---
-        $channel_data[$trello_prov] = ['cost' => $four_weeks_costs[$internal_name] ?? 0, 'leads' => 0, 'quality_scores' => ['high' => 0, 'medium' => 0, 'low' => 0, 'unknown' => 0]];
-    }
-    foreach ($recent_cards as $card) {
-        $provenance = wp_trello_get_card_provenance($card, $board_provenance_ids_map) ?? 'N/D';
-        if (isset($channel_data[$provenance])) {
-            $channel_data[$provenance]['leads']++;
-            $prob = $predictive_results[$card['id']] ?? -1;
-            if ($prob >= 0.7) $channel_data[$provenance]['quality_scores']['high']++;
-            elseif ($prob >= 0.4) $channel_data[$provenance]['quality_scores']['medium']++;
-            elseif ($prob >= 0) $channel_data[$provenance]['quality_scores']['low']++;
-            else $channel_data[$provenance]['quality_scores']['unknown']++;
-        }
-    }
-    $data_for_prompt = [];
-    foreach ($channel_data as $name => $data) {
-        if ($data['leads'] == 0 && $data['cost'] == 0) continue;
-        $cpl = ($data['leads'] > 0) ? round($data['cost'] / $data['leads'], 2) : 0;
-        // --- MODIFICA: Specifica nel prompt che i dati sono mensili ---
-        $data_for_prompt[] = ['canale' => $name, 'costo_mensile' => $data['cost'], 'lead_generati_nel_mese' => $data['leads'], 'costo_per_lead' => $cpl, 'qualita_lead' => $data['quality_scores']];
-    }
-    if (empty($data_for_prompt)) return new WP_Error('no_marketing_data', 'Nessun dato di marketing o lead trovato per le ultime 4 settimane.');
-
-    $prompt = stma_create_advisor_prompt($data_for_prompt);
-    return stma_call_openai_api($prompt);
+    return $saved_results;
 }
 
 function stsg_format_marketing_advisor_data_as_html($data) {
