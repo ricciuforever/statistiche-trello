@@ -23,6 +23,7 @@ include_once plugin_dir_path(__FILE__) . 'predictive-analysis/trello-background-
 include_once plugin_dir_path(__FILE__) . 'predictive-analysis/trello-real-data-exporter.php';
 include_once plugin_dir_path(__FILE__) . 'sheet/sheet-generator.php';
 include_once plugin_dir_path(__FILE__) . 'sheet/trello-quotes-sheet-generator.php';
+include_once plugin_dir_path(__FILE__) . 'sheet/email-reporter.php';
 include_once plugin_dir_path(__FILE__) . 'marketing-advisor/marketing-advisor-main.php';
 include_once plugin_dir_path(__FILE__) . 'marketing-advisor/marketing-advisor-infographic.php'; 
 include_once plugin_dir_path(__FILE__) . 'call-to-comments/call-to-comments-main.php';
@@ -37,6 +38,7 @@ function wp_trello_plugin_menu() {
     add_submenu_page('wp-trello-plugin', '📊 Generatore Sheet', '📊 Generatore Sheet', 'manage_options', 'stsg-sheet-generator', 'stsg_render_admin_page');
     add_submenu_page('wp-trello-plugin', '📝 Foglio Preventivi', '📝 Foglio Preventivi', 'manage_options', 'wtqsg-quotes-sheet', 'wtqsg_render_quotes_sheet_page');
     add_submenu_page('wp-trello-plugin', 'Marketing Advisor', '🤖 Marketing Advisor', 'manage_options', 'stma-marketing-advisor', 'stma_render_advisor_page');
+    add_submenu_page('wp-trello-plugin', '📧 Report Email', '📧 Report Email', 'manage_options', 'stsg-email-reporter', 'stsg_render_email_report_settings_page');
     // ==> AGGIUNGI QUESTA RIGA <==
     if (function_exists('stc_register_submenu_page')) {
         stc_register_submenu_page();
@@ -267,7 +269,8 @@ if (!function_exists('wp_trello_plugin_enqueue_styles')) {
             'statistiche-avanzate_page_stpa-predictive-analysis',
             'statistiche-avanzate_page_stsg-sheet-generator',
             'statistiche-avanzate_page_wtqsg-quotes-sheet',
-            'statistiche-avanzate_page_stma-marketing-advisor'
+            'statistiche-avanzate_page_stma-marketing-advisor',
+            'statistiche-avanzate_page_stsg-email-reporter'
         ];
 
         if(!in_array($hook_suffix, $plugin_pages)) {
