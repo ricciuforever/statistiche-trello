@@ -255,7 +255,6 @@ function stma_get_marketing_analysis_ajax() {
     $summary_for_ai = [];
     foreach ($aggregated_data as $platform => $data) {
         $display_name = array_search($platform, $provenance_to_internal_platform_map) ?: ucfirst($platform);
-        if ($data['costo_totale'] == 0 && $data['numero_lead'] == 0) continue;
         $cpl = ($data['numero_lead'] > 0) ? round($data['costo_totale'] / $data['numero_lead'], 2) : 'N/A';
         $avg_quality = ($data['lead_con_previsione'] > 0) ? round(($data['somma_probabilita'] / $data['lead_con_previsione']) * 100, 2) : 'N/A';
         $summary_for_ai[$display_name] = ['costo_canale' => $data['costo_totale'], 'costo_per_lead' => $cpl, 'qualita_media_lead_percentuale' => $avg_quality, 'numero_lead_generati' => $data['numero_lead']];
