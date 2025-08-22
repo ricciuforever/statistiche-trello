@@ -345,11 +345,11 @@ function stsg_get_marketing_advisor_report_data() {
 
     // Includi forzatamente i file necessari per garantire la disponibilità delle funzioni
     $plugin_path = ABSPATH . 'wp-content/plugins/statistiche-trello/';
-    include_once($plugin_path . 'marketing-advisor/marketing-advisor-main.php');
+    include_once($plugin_path . 'trello-marketing-charts.php');
     include_once($plugin_path . 'marketing-advisor/marketing-advisor-ajax.php');
 
     if (!function_exists('wp_trello_get_marketing_data_with_leads_costs_v19') || !function_exists('stma_create_advisor_prompt') || !function_exists('stma_call_openai_api')) {
-        return new WP_Error('missing_functions', 'Le funzioni del modulo Marketing Advisor non sono ancora disponibili dopo l\'inclusione forzata.');
+        return new WP_Error('missing_functions', 'Le funzioni del modulo Marketing Advisor non sono disponibili. Assicurati che i file `trello-marketing-charts.php` e `marketing-advisor-ajax.php` siano presenti e corretti.');
     }
 
     $provenance_map = ['iol' => 'italiaonline', 'chiamate' => 'chiamate', 'Organic Search' => 'organico', 'taormina' => 'taormina', 'fb' => 'facebook', 'Google Ads' => 'google ads', 'Subito' => 'subito', 'poolindustriale.it' => 'pool industriale', 'archiexpo' => 'archiexpo', 'Bakeka' => 'bakeka', 'Europage' => 'europage'];
@@ -418,8 +418,7 @@ function stsg_get_marketing_advisor_report_data() {
     if (empty($data_for_prompt)) return new WP_Error('no_marketing_data', 'Nessun dato di marketing o lead trovato per le ultime 4 settimane.');
 
     $prompt = stma_create_advisor_prompt($data_for_prompt);
-    $openai_api_key = defined('OPENAI_API_KEY') ? OPENAI_API_KEY : '';
-    return stma_call_openai_api($prompt, $openai_api_key);
+    return stma_call_openai_api($prompt);
 }
 
 function stsg_format_marketing_advisor_data_as_html($data) {

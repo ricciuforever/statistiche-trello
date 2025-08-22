@@ -11,6 +11,7 @@ if (!defined('ABSPATH')) exit;
 // ==> CORREZIONE 1: Includi il file con la funzione per generare l'infografica.
 // Questo risolve l'errore fatale che causava il fallimento della chiamata AJAX.
 require_once(plugin_dir_path(__FILE__) . 'marketing-advisor-infographic.php');
+require_once(plugin_dir_path(__FILE__) . 'marketing-advisor-ajax.php');
 // =========================================================================
 
 // --- Costanti e Setup Tabella ---
@@ -181,11 +182,6 @@ function stma_get_marketing_analysis_ajax() {
     set_time_limit(300);
     check_ajax_referer('stma_marketing_advisor_nonce', 'nonce');
 
-    $openai_api_key = defined('OPENAI_API_KEY') ? OPENAI_API_KEY : '';
-    if (empty($openai_api_key)) {
-        wp_send_json_error(['message' => 'La chiave API di OpenAI (OPENAI_API_KEY) non è definita.']);
-        return;
-    }
     
     // =========================================================================
     // ==> CORREZIONE 2: Controlla se la funzione per prendere i dati esiste prima di chiamarla.
@@ -402,20 +398,4 @@ function stma_get_trello_details_for_cards($card_ids) {
         }
     }
     return $trello_details;
-}
-
-function stma_call_openai_api($prompt, $api_key) {
-    $endpoint = 'https://api.openai.com/v1/chat/completions';
-    $body = ['model' => 'gpt-4o', 'messages' => [['role' => 'user', 'content' => $prompt]], 'temperature' => 0.5, 'max_tokens' => 3500];
-    $args = ['body' => json_encode($body), 'headers' => ['Content-Type' => 'application/json', 'Authorization' => 'Bearer ' . $api_key], 'timeout' => 180];
-    $response = wp_remote_post($endpoint, $args);
-    if (is_wp_error($response)) { return new WP_Error('openai_request_failed', 'Richiesta a OpenAI fallita: ' . $response->get_error_message()); }
-    $http_code = wp_remote_retrieve_response_code($response);
-    $response_body = json_decode(wp_remote_retrieve_body($response), true);
-    if ($http_code === 200 && !isset($response_body['error'])) {
-        if (empty($response_body['choices'][0]['message']['content'])) { return new WP_Error('openai_empty_response', 'Risposta da OpenAI vuota o non valida.'); }
-        return $response_body['choices'][0]['message']['content'];
-    }
-    $error_message = isset($response_body['error']['message']) ? $response_body['error']['message'] : 'Errore sconosciuto';
-    return new WP_Error('openai_api_error', 'Errore API OpenAI: ' . $error_message);
 }
