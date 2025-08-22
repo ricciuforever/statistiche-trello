@@ -316,7 +316,7 @@ function stsg_get_predictive_analysis_report_data() {
     $query = $wpdb->prepare(
         "SELECT card_name, card_url, probability, period
          FROM {$results_table}
-         WHERE analysis_id = %s AND probability > 0.75
+         WHERE analysis_id = %s AND probability > 0.75 AND period = 30
          ORDER BY probability DESC",
         $analysis_id
     );
@@ -342,6 +342,10 @@ function stsg_format_predictive_data_as_table($data) {
 
 function stsg_get_marketing_advisor_report_data() {
     global $wpdb;
+
+    // Assicura che il file con le funzioni helper sia caricato, specialmente in contesto cron
+    include_once(ABSPATH . 'wp-content/plugins/statistiche-trello/marketing-advisor/marketing-advisor-ajax.php');
+
     if (!function_exists('wp_trello_get_marketing_data_with_leads_costs_v19') || !function_exists('stma_create_advisor_prompt') || !function_exists('stma_call_openai_api')) {
         return new WP_Error('missing_functions', 'Le funzioni del modulo Marketing Advisor non sono disponibili.');
     }
