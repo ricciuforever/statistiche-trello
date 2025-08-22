@@ -13,6 +13,37 @@ if (!defined('ABSPATH')) exit;
 require_once(plugin_dir_path(__FILE__) . 'marketing-advisor-infographic.php');
 // =========================================================================
 
+// --- Costanti e Setup Tabella ---
+define('STMA_VERSION', '1.0.0');
+define('STMA_DB_VERSION_OPTION', 'stma_db_version');
+global $wpdb;
+define('STMA_RESULTS_TABLE', $wpdb->prefix . 'stma_analysis_results');
+
+add_action('admin_init', 'stma_check_and_upgrade_db');
+
+function stma_check_and_upgrade_db() {
+    if (get_option(STMA_DB_VERSION_OPTION) != STMA_VERSION) {
+        stma_create_results_table();
+        update_option(STMA_DB_VERSION_OPTION, STMA_VERSION);
+    }
+}
+
+function stma_create_results_table() {
+    global $wpdb;
+    $table_name = STMA_RESULTS_TABLE;
+    $charset_collate = $wpdb->get_charset_collate();
+    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+
+    $sql = "CREATE TABLE $table_name (
+        id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        results_json LONGTEXT NOT NULL,
+        PRIMARY KEY  (id)
+    ) $charset_collate;";
+
+    dbDelta($sql);
+}
+
 
 /**
  * Funzione per renderizzare la pagina di amministrazione del Marketing Advisor.
@@ -322,6 +353,17 @@ PROMPT; // Ho abbreviato per leggibilità
     if (is_wp_error($ai_response_text)) {
         wp_send_json_error(['message' => 'Chiamata a OpenAI fallita: ' . $ai_response_text->get_error_message()]);
     } else {
+        // Salva il risultato nella nuova tabella del database
+        global $wpdb;
+        $table_name = STMA_RESULTS_TABLE;
+        $data_to_save = [
+            'results_json' => json_encode([
+                'analysis' => $ai_response_text,
+                'infographic' => $infographic_html
+            ])
+        ];
+        $wpdb->insert($table_name, $data_to_save, ['%s']);
+
         wp_send_json_success(['analysis' => $ai_response_text, 'infographic' => $infographic_html]);
     }
 }
