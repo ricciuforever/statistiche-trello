@@ -121,9 +121,6 @@ function stma_ajax_get_marketing_advice_handler() {
          return;
     }
 
-    // Salva l'ultima analisi completata nel database per il report via email
-    update_option('stma_last_analysis_results', $ai_response);
-
     // --- 6. Formattazione Risposta ---
     $recommendations_html = '<ul>';
     foreach ($ai_response['recommendations'] as $rec) {
