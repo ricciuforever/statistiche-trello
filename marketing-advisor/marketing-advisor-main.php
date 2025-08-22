@@ -11,7 +11,6 @@ if (!defined('ABSPATH')) exit;
 // ==> CORREZIONE 1: Includi il file con la funzione per generare l'infografica.
 // Questo risolve l'errore fatale che causava il fallimento della chiamata AJAX.
 require_once(plugin_dir_path(__FILE__) . 'marketing-advisor-infographic.php');
-require_once(plugin_dir_path(__FILE__) . 'marketing-advisor-ajax.php');
 // =========================================================================
 
 // --- Costanti e Setup Tabella ---
@@ -182,6 +181,11 @@ function stma_get_marketing_analysis_ajax() {
     set_time_limit(300);
     check_ajax_referer('stma_marketing_advisor_nonce', 'nonce');
 
+    $openai_api_key = defined('OPENAI_API_KEY') ? OPENAI_API_KEY : '';
+    if (empty($openai_api_key)) {
+        wp_send_json_error(['message' => 'La chiave API di OpenAI (OPENAI_API_KEY) non è definita.']);
+        return;
+    }
 
     // =========================================================================
     // ==> CORREZIONE 2: Controlla se la funzione per prendere i dati esiste prima di chiamarla.
@@ -364,3 +368,54 @@ PROMPT; // Ho abbreviato per leggibilità
     }
 }
 add_action('wp_ajax_stma_get_marketing_analysis', 'stma_get_marketing_analysis_ajax');
+
+
+// ... IL RESTO DELLE FUNZIONI HELPER RIMANE INVARIATO ...
+
+function stma_get_predictions_for_period($start_date, $end_date) {
+    global $wpdb;
+    $results_table = 'wpmq_stpa_predictive_results';
+    if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $results_table)) != $results_table) { return new WP_Error('db_table_not_found', "Tabella dei risultati '{$results_table}' non trovata."); }
+    $query = $wpdb->prepare("SELECT card_id, probability, period FROM {$results_table} WHERE created_at >= %s AND created_at <= %s AND card_id REGEXP '^[a-f0-9]{24}$'", $start_date->format('Y-m-d H:i:s'), $end_date->format('Y-m-d H:i:s'));
+    $results = $wpdb->get_results($query, ARRAY_A);
+    if ($wpdb->last_error) { return new WP_Error('db_query_error', 'Query fallita: ' . $wpdb->last_error); }
+    $latest_short_term_predictions = [];
+    foreach ($results as $row) {
+        $card_id = $row['card_id']; $period = (int)$row['period']; $probability = (float)$row['probability'];
+        if (!isset($latest_short_term_predictions[$card_id]) || $period < $latest_short_term_predictions[$card_id]['period']) {
+            $latest_short_term_predictions[$card_id] = ['probability' => $probability, 'period' => $period];
+        }
+    }
+    return array_map(function($p) { return $p['probability']; }, $latest_short_term_predictions);
+}
+
+function stma_get_trello_details_for_cards($card_ids) {
+    if (empty($card_ids)) return [];
+    global $wpdb;
+    $cache_table = defined('STPA_CARDS_CACHE_TABLE') ? STPA_CARDS_CACHE_TABLE : $wpdb->prefix . 'stpa_cards_cache';
+    $trello_details = [];
+    $placeholders = implode(', ', array_fill(0, count($card_ids), '%s'));
+    $results = $wpdb->get_results($wpdb->prepare("SELECT card_id, provenance FROM {$cache_table} WHERE card_id IN ($placeholders)", $card_ids), OBJECT_K);
+    if (!empty($results)) {
+        foreach ($results as $card_id => $data) {
+            $trello_details[$card_id] = ['provenance' => $data->provenance];
+        }
+    }
+    return $trello_details;
+}
+
+function stma_call_openai_api($prompt, $api_key) {
+    $endpoint = 'https://api.openai.com/v1/chat/completions';
+    $body = ['model' => 'gpt-4o', 'messages' => [['role' => 'user', 'content' => $prompt]], 'temperature' => 0.5, 'max_tokens' => 3500];
+    $args = ['body' => json_encode($body), 'headers' => ['Content-Type' => 'application/json', 'Authorization' => 'Bearer ' . $api_key], 'timeout' => 180];
+    $response = wp_remote_post($endpoint, $args);
+    if (is_wp_error($response)) { return new WP_Error('openai_request_failed', 'Richiesta a OpenAI fallita: ' . $response->get_error_message()); }
+    $http_code = wp_remote_retrieve_response_code($response);
+    $response_body = json_decode(wp_remote_retrieve_body($response), true);
+    if ($http_code === 200 && !isset($response_body['error'])) {
+        if (empty($response_body['choices'][0]['message']['content'])) { return new WP_Error('openai_empty_response', 'Risposta da OpenAI vuota o non valida.'); }
+        return $response_body['choices'][0]['message']['content'];
+    }
+    $error_message = isset($response_body['error']['message']) ? $response_body['error']['message'] : 'Errore sconosciuto';
+    return new WP_Error('openai_api_error', 'Errore API OpenAI: ' . $error_message);
+}

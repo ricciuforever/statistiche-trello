@@ -263,9 +263,19 @@ function stsg_send_marketing_advisor_report() {
     if (empty($recipients_str)) return new WP_Error('no_recipients', 'Nessun destinatario per il report Marketing Advisor.');
     $recipients = array_filter(array_map('trim', explode(',', $recipients_str)), 'is_email');
     if (empty($recipients)) return new WP_Error('no_valid_recipients', 'Nessun indirizzo email valido configurato.');
-    $report_data = stsg_get_marketing_advisor_report_data();
-    if (is_wp_error($report_data)) return $report_data;
-    $html_content = stsg_format_marketing_advisor_data_as_html($report_data);
+
+    $html_content = stsg_get_marketing_advisor_report_data();
+
+    if (is_wp_error($html_content)) {
+        // In caso di errore, invia un'email di notifica
+        $error_message = $html_content->get_error_message();
+        $subject = "Errore: Report Marketing Advisor non generato";
+        $message = "<html><body><h1>Errore nella generazione del Report Marketing Advisor</h1><p>Si è verificato un errore durante la generazione del report:</p><pre>" . esc_html($error_message) . "</pre></body></html>";
+        // Potresti voler inviare questa notifica a un admin invece che ai destinatari del report
+        $admin_email = get_option('admin_email');
+        return wp_mail($admin_email, $subject, $message, ['Content-Type: text/html; charset=UTF-8']);
+    }
+
     $subject = "Report Marketing Advisor: Analisi e Raccomandazioni (Ultime 4 Settimane)";
     $message = "<html><body style='font-family: sans-serif;'><h1>Report Marketing Advisor</h1><p>Di seguito l'analisi delle performance di marketing delle ultime 4 settimane e le raccomandazioni per l'ottimizzazione del budget.</p>" . $html_content . "</body></html>";
     return wp_mail($recipients, $subject, $message, ['Content-Type: text/html; charset=UTF-8']);
@@ -343,17 +353,20 @@ function stsg_format_predictive_data_as_table($data) {
 function stsg_get_marketing_advisor_report_data() {
     // Include necessary files
     $plugin_path = ABSPATH . 'wp-content/plugins/statistiche-trello/';
+    include_once($plugin_path . 'marketing-advisor/marketing-advisor-main.php');
     include_once($plugin_path . 'trello-marketing-charts.php');
-    include_once($plugin_path . 'marketing-advisor/marketing-advisor-ajax.php');
 
     // Check for function existence
-    if (!function_exists('wp_trello_get_marketing_data_with_leads_costs_v19') || !function_exists('stma_get_predictions_for_period') || !function_exists('stma_create_advisor_prompt') || !function_exists('stma_call_openai_api')) {
+    if (!function_exists('wp_trello_get_marketing_data_with_leads_costs_v19') || !function_exists('stma_get_predictions_for_period') || !function_exists('stma_get_trello_details_for_cards') || !function_exists('stma_call_openai_api')) {
         return new WP_Error('missing_functions', 'Una o più funzioni del modulo Marketing Advisor non sono disponibili.');
     }
 
     // --- 1. Set Date Range (Last 28 days) ---
     $end_date = new DateTime('now', new DateTimeZone('Europe/Rome'));
     $start_date = (new DateTime('now', new DateTimeZone('Europe/Rome')))->modify('-28 days');
+
+    $days_in_period = 28;
+    $weeks_in_period = 4;
 
     // --- 2. Fetch Marketing Costs ---
     $all_marketing_data = wp_trello_get_marketing_data_with_leads_costs_v19();
@@ -378,74 +391,114 @@ function stsg_get_marketing_advisor_report_data() {
     $card_ids_with_predictions = array_keys($predictions);
     $trello_details = stma_get_trello_details_for_cards($card_ids_with_predictions);
 
-    // --- 4. Aggregate Data ---
-    $provenance_map = ['iol' => 'italiaonline', 'chiamate' => 'chiamate', 'Organic Search' => 'organico', 'taormina' => 'taormina', 'fb' => 'facebook', 'Google Ads' => 'google ads', 'Subito' => 'subito', 'poolindustriale.it' => 'pool industriale', 'archiexpo' => 'archiexpo', 'Bakeka' => 'bakeka', 'Europage' => 'europage'];
+    // --- 4. Aggregate Data using the same logic as the manual page ---
+    $provenance_to_internal_platform_map = ['iol' => 'italiaonline', 'chiamate' => 'chiamate', 'Organic Search' => 'organico', 'taormina' => 'taormina', 'fb' => 'facebook', 'Google Ads' => 'google ads', 'Subito' => 'subito', 'poolindustriale.it' => 'pool industriale', 'archiexpo' => 'archiexpo', 'Bakeka' => 'bakeka', 'Europage' => 'europage'];
     $aggregated_data = [];
 
-    // Initialize all possible platforms
-    $all_platforms = array_unique(array_merge(array_keys($provenance_map), array_keys($marketing_costs)));
-    foreach ($all_platforms as $trello_prov) {
-        $internal_name = $provenance_map[$trello_prov] ?? $trello_prov;
-        $aggregated_data[$trello_prov] = [
-            'cost' => $marketing_costs[$internal_name] ?? 0,
-            'leads' => 0,
-            'quality_scores' => ['high' => 0, 'medium' => 0, 'low' => 0, 'unknown' => 0]
-        ];
+    $all_platforms = array_unique(array_merge(array_values($provenance_to_internal_platform_map), array_keys($marketing_costs)));
+    foreach ($all_platforms as $internal_platform) {
+        $aggregated_data[$internal_platform] = [ 'costo_totale' => $marketing_costs[$internal_platform] ?? 0, 'numero_lead' => 0, 'somma_probabilita' => 0.0, 'lead_con_previsione' => 0 ];
     }
 
-    // Populate with lead data
     foreach ($predictions as $card_id => $probability) {
         if (!isset($trello_details[$card_id])) continue;
-
         $provenance = $trello_details[$card_id]['provenance'];
-
-        if (isset($aggregated_data[$provenance])) {
-            $aggregated_data[$provenance]['leads']++;
-            if ($probability >= 0.7) $aggregated_data[$provenance]['quality_scores']['high']++;
-            elseif ($probability >= 0.4) $aggregated_data[$provenance]['quality_scores']['medium']++;
-            elseif ($probability >= 0) $aggregated_data[$provenance]['quality_scores']['low']++;
-            else $aggregated_data[$provenance]['quality_scores']['unknown']++;
+        $internal_platform = $provenance_to_internal_platform_map[$provenance] ?? null;
+        if ($internal_platform) {
+            if (!isset($aggregated_data[$internal_platform])) {
+                 $aggregated_data[$internal_platform] = ['costo_totale' => 0, 'numero_lead'  => 0, 'somma_probabilita' => 0.0, 'lead_con_previsione' => 0];
+            }
+            $aggregated_data[$internal_platform]['numero_lead']++;
+            $aggregated_data[$internal_platform]['somma_probabilita'] += $probability;
+            $aggregated_data[$internal_platform]['lead_con_previsione']++;
         }
     }
 
+    $total_cost_incurred = array_sum(array_column($aggregated_data, 'costo_totale'));
+    $average_weekly_budget = round($total_cost_incurred / $weeks_in_period, 2);
+
     // --- 5. Prepare data for OpenAI prompt ---
-    $data_for_prompt = [];
-    foreach ($aggregated_data as $name => $data) {
-        if ($data['leads'] == 0 && $data['cost'] == 0) continue;
-        $cpl = ($data['leads'] > 0) ? round($data['cost'] / $data['leads'], 2) : 0;
-        $data_for_prompt[] = [
-            'canale' => $name,
-            'costo_mensile' => $data['cost'],
-            'lead_generati_nel_mese' => $data['leads'],
-            'costo_per_lead' => $cpl,
-            'qualita_lead' => $data['quality_scores']
-        ];
+    $summary_for_ai = [];
+    foreach ($aggregated_data as $platform => $data) {
+        $display_name = array_search($platform, $provenance_to_internal_platform_map) ?: ucfirst($platform);
+        if ($data['costo_totale'] == 0 && $data['numero_lead'] == 0) continue;
+        $cpl = ($data['numero_lead'] > 0) ? round($data['costo_totale'] / $data['numero_lead'], 2) : 'N/A';
+        $avg_quality = ($data['lead_con_previsione'] > 0) ? round(($data['somma_probabilita'] / $data['lead_con_previsione']) * 100, 2) : 'N/A';
+        $summary_for_ai[$display_name] = ['costo_canale' => $data['costo_totale'], 'costo_per_lead' => $cpl, 'qualita_media_lead_percentuale' => $avg_quality, 'numero_lead_generati' => $data['numero_lead']];
     }
 
-    if (empty($data_for_prompt)) {
+    if (empty($summary_for_ai)) {
         return new WP_Error('no_aggregated_data', 'Nessun dato di marketing aggregato trovato per le ultime 4 settimane.');
     }
 
-    // --- 6. Call OpenAI ---
-    $prompt = stma_create_advisor_prompt($data_for_prompt);
-    return stma_call_openai_api($prompt);
-}
+    // --- 6. Generate and Call OpenAI ---
+    $json_summary_for_ai = json_encode($summary_for_ai, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    $prompt = <<<PROMPT
+Sei un Senior Marketing Strategist per un'agenzia di consulenza d'elite. Il tuo cliente è un'azienda B2B italiana. Devi produrre un'analisi chiara, professionale e orientata all'azione.
 
-function stsg_format_marketing_advisor_data_as_html($data) {
-    if (is_wp_error($data) || !isset($data['analysis']) || !isset($data['recommendations'])) return '<p>Errore nella generazione dell\'analisi del Marketing Advisor.</p>';
-    $html = '<h2>Analisi</h2><div>' . wp_kses_post($data['analysis']) . '</div><h2>Raccomandazioni Budget</h2>';
-    if (empty($data['recommendations'])) {
-        $html .= '<p>Nessuna raccomandazione specifica sul budget fornita.</p>';
-    } else {
-        $html .= '<ul style="list-style-type: disc; padding-left: 20px;">';
-        foreach ($data['recommendations'] as $rec) {
-            $sign = ($rec['percentage_change'] ?? 0) > 0 ? '+' : '';
-            $color = ($rec['percentage_change'] ?? 0) > 0 ? 'green' : ((($rec['percentage_change'] ?? 0) < 0) ? 'red' : 'black');
-            $html .= sprintf('<li style="margin-bottom: 10px;"><strong>%s %s:</strong> <span style="color: %s;">%s%d%%</span>. <br><em>%s</em></li>', esc_html($rec['action'] ?? 'N/A'), esc_html($rec['channel'] ?? 'N/A'), esc_attr($color), esc_html($sign), (int)($rec['percentage_change'] ?? 0), esc_html($rec['justification'] ?? 'N/A'));
-        }
-        $html .= '</ul>';
+**Regole Fondamentali:**
+1.  **La Qualità Vince:** La metrica `qualita_media_lead_percentuale` è il fattore decisionale primario. Un canale con lead di alta qualità (>40%) merita investimento, anche se il CPL è alto. Canali con qualità molto bassa (<25%) sono da tagliare o ridurre drasticamente.
+2.  **Giustificazioni Basate sui Dati:** Ogni raccomandazione deve essere supportata da dati numerici specifici (CPL, qualità %).
+3.  **Formato HTML Professionale:** Usa le classi UIkit fornite per formattare la tua risposta. Sii analitico e dettagliato.
+
+**Dati da Analizzare:**
+- **Periodo:** {$days_in_period} giorni (~{$weeks_in_period} settimane).
+- **Budget Medio Settimanale Speso:** {$average_weekly_budget} EUR.
+- **Performance Canali (dati aggregati):**
+{$json_summary_for_ai}
+
+**FORMATO DI OUTPUT (HTML OBBLIGATORIO):**
+
+<div class="uk-card uk-card-default uk-card-body uk-margin-bottom">
+    <h3 class="uk-card-title">Executive Summary</h3>
+    <p>Scrivi qui un riassunto di 2-3 frasi con le conclusioni principali. Evidenzia il canale migliore e quello peggiore.</p>
+</div>
+
+<div class="uk-card uk-card-default uk-card-body uk-margin-bottom">
+    <h3 class="uk-card-title">Analisi Dettagliata per Canale</h3>
+    <ul uk-accordion>
+        <li>
+            <a class="uk-accordion-title" href="#">Nome Canale 1</a>
+            <div class="uk-accordion-content">
+                <p>Scrivi un'analisi dettagliata per questo canale. Includi CPL, numero di lead e soprattutto la qualità media in percentuale. Spiega perché il budget andrebbe aumentato, diminuito o mantenuto.</p>
+                <ul>
+                    <li><strong>Punto di Forza:</strong> (Es: Qualità lead eccellente)</li>
+                    <li><strong>Punto debole:</strong> (Es: Costo per lead molto alto)</li>
+                    <li><strong>Raccomandazione:</strong> (Es: Aumentare budget)</li>
+                </ul>
+            </div>
+        </li>
+    </ul>
+</div>
+
+<div class="uk-card uk-card-default uk-card-body">
+    <h3 class="uk-card-title">Proposta di Allocazione Budget Settimanale</h3>
+    <p>Basandosi sull'analisi, ecco una proposta di riallocazione del budget medio settimanale di circa <strong>{$average_weekly_budget} EUR</strong> per massimizzare il ritorno sull'investimento puntando sulla qualità dei lead.</p>
+    <table class="uk-table uk-table-striped uk-table-hover">
+        <thead>
+            <tr>
+                <th>Canale</th>
+                <th class="uk-text-right">Budget Settimanale Consigliato (€)</th>
+                <th>Razionale</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>Nome Canale 1</td>
+                <td class="uk-text-right">NUOVO BUDGET</td>
+                <td>(Es: Aumento per alta qualità)</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+PROMPT;
+
+    $openai_api_key = defined('OPENAI_API_KEY') ? OPENAI_API_KEY : '';
+    if (empty($openai_api_key)) {
+        return new WP_Error('api_key_missing', 'La chiave API di OpenAI (OPENAI_API_KEY) non è definita.');
     }
-    return $html;
+
+    return stma_call_openai_api($prompt, $openai_api_key);
 }
 
 function stsg_get_data_for_email_report() {
