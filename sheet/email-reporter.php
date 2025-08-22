@@ -341,82 +341,92 @@ function stsg_format_predictive_data_as_table($data) {
 }
 
 function stsg_get_marketing_advisor_report_data() {
-    global $wpdb;
-
-    // Includi forzatamente i file necessari per garantire la disponibilità delle funzioni
+    // Include necessary files
     $plugin_path = ABSPATH . 'wp-content/plugins/statistiche-trello/';
     include_once($plugin_path . 'trello-marketing-charts.php');
     include_once($plugin_path . 'marketing-advisor/marketing-advisor-ajax.php');
 
-    if (!function_exists('wp_trello_get_marketing_data_with_leads_costs_v19') || !function_exists('stma_create_advisor_prompt') || !function_exists('stma_call_openai_api')) {
-        return new WP_Error('missing_functions', 'Le funzioni del modulo Marketing Advisor non sono disponibili. Assicurati che i file `trello-marketing-charts.php` e `marketing-advisor-ajax.php` siano presenti e corretti.');
+    // Check for function existence
+    if (!function_exists('wp_trello_get_marketing_data_with_leads_costs_v19') || !function_exists('stma_get_predictions_for_period') || !function_exists('stma_create_advisor_prompt') || !function_exists('stma_call_openai_api')) {
+        return new WP_Error('missing_functions', 'Una o più funzioni del modulo Marketing Advisor non sono disponibili.');
     }
 
-    $provenance_map = ['iol' => 'italiaonline', 'chiamate' => 'chiamate', 'Organic Search' => 'organico', 'taormina' => 'taormina', 'fb' => 'facebook', 'Google Ads' => 'google ads', 'Subito' => 'subito', 'poolindustriale.it' => 'pool industriale', 'archiexpo' => 'archiexpo', 'Bakeka' => 'bakeka', 'Europage' => 'europage'];
+    // --- 1. Set Date Range (Last 28 days) ---
+    $end_date = new DateTime('now', new DateTimeZone('Europe/Rome'));
+    $start_date = (new DateTime('now', new DateTimeZone('Europe/Rome')))->modify('-28 days');
 
-    $marketing_data = wp_trello_get_marketing_data_with_leads_costs_v19();
-    $four_weeks_costs = [];
-    $today = new DateTime('now', new DateTimeZone('Europe/Rome'));
-    for ($i = 0; $i < 4; $i++) {
-        $date_in_week = (clone $today)->modify("-$i weeks");
-        $iso_week = $date_in_week->format("o-\WW");
-        $week_costs = $marketing_data[$iso_week]['costs'] ?? [];
-        foreach ($week_costs as $channel => $cost) {
-            $four_weeks_costs[$channel] = ($four_weeks_costs[$channel] ?? 0) + $cost;
-        }
-    }
-
-    $twenty_eight_days_ago = new DateTime('-28 days', new DateTimeZone('Europe/Rome'));
-    $trello_timestamp_28_days_ago = dechex($twenty_eight_days_ago->getTimestamp());
-
-    $apiKey = defined('TRELLO_API_KEY') ? TRELLO_API_KEY : '';
-    $apiToken = defined('TRELLO_API_TOKEN') ? TRELLO_API_TOKEN : '';
-    $all_boards = get_trello_boards($apiKey, $apiToken);
-    $board_ids = array_column($all_boards, 'id');
-    $board_provenance_ids_map = wp_trello_get_provenance_field_ids_map($board_ids, $apiKey, $apiToken);
-    $recent_cards = [];
-    foreach ($board_ids as $board_id) {
-        if(empty($board_id)) continue;
-        $cards = get_trello_cards($board_id, $apiKey, $apiToken);
-        if (is_array($cards)) {
-            foreach ($cards as $card) {
-                if (hexdec(substr($card['id'], 0, 8)) >= $trello_timestamp_28_days_ago) $recent_cards[] = $card;
+    // --- 2. Fetch Marketing Costs ---
+    $all_marketing_data = wp_trello_get_marketing_data_with_leads_costs_v19();
+    $marketing_costs = [];
+    foreach ($all_marketing_data as $week_data) {
+        if (isset($week_data['start_date_obj']) && $week_data['start_date_obj'] >= $start_date && $week_data['start_date_obj'] <= $end_date) {
+            foreach ($week_data['costs'] as $p => $c) {
+                $marketing_costs[$p] = ($marketing_costs[$p] ?? 0) + $c;
             }
         }
     }
-    $card_ids = array_column($recent_cards, 'id');
-    $predictive_results = [];
-    if (!empty($card_ids)) {
-        $ids_placeholder = implode(', ', array_fill(0, count($card_ids), '%s'));
-        $results_table = $wpdb->prefix . 'stpa_predictive_results';
-        $db_results = $wpdb->get_results($wpdb->prepare("SELECT card_id, probability FROM $results_table WHERE card_id IN ($ids_placeholder) ORDER BY created_at DESC", $card_ids), ARRAY_A);
-        foreach ($db_results as $row) {
-            if (!isset($predictive_results[$row['card_id']])) $predictive_results[$row['card_id']] = (float)$row['probability'];
+
+    // --- 3. Fetch Leads and Predictions from Database ---
+    $predictions = stma_get_predictions_for_period($start_date, $end_date);
+    if (is_wp_error($predictions)) {
+        return new WP_Error('predictions_failed', 'Errore nel recupero delle previsioni: ' . $predictions->get_error_message());
+    }
+    if (empty($predictions)) {
+        return new WP_Error('no_leads_found', 'Nessun lead con previsioni trovato negli ultimi 28 giorni.');
+    }
+
+    $card_ids_with_predictions = array_keys($predictions);
+    $trello_details = stma_get_trello_details_for_cards($card_ids_with_predictions);
+
+    // --- 4. Aggregate Data ---
+    $provenance_map = ['iol' => 'italiaonline', 'chiamate' => 'chiamate', 'Organic Search' => 'organico', 'taormina' => 'taormina', 'fb' => 'facebook', 'Google Ads' => 'google ads', 'Subito' => 'subito', 'poolindustriale.it' => 'pool industriale', 'archiexpo' => 'archiexpo', 'Bakeka' => 'bakeka', 'Europage' => 'europage'];
+    $aggregated_data = [];
+
+    // Initialize all possible platforms
+    $all_platforms = array_unique(array_merge(array_keys($provenance_map), array_keys($marketing_costs)));
+    foreach ($all_platforms as $trello_prov) {
+        $internal_name = $provenance_map[$trello_prov] ?? $trello_prov;
+        $aggregated_data[$trello_prov] = [
+            'cost' => $marketing_costs[$internal_name] ?? 0,
+            'leads' => 0,
+            'quality_scores' => ['high' => 0, 'medium' => 0, 'low' => 0, 'unknown' => 0]
+        ];
+    }
+
+    // Populate with lead data
+    foreach ($predictions as $card_id => $probability) {
+        if (!isset($trello_details[$card_id])) continue;
+
+        $provenance = $trello_details[$card_id]['provenance'];
+
+        if (isset($aggregated_data[$provenance])) {
+            $aggregated_data[$provenance]['leads']++;
+            if ($probability >= 0.7) $aggregated_data[$provenance]['quality_scores']['high']++;
+            elseif ($probability >= 0.4) $aggregated_data[$provenance]['quality_scores']['medium']++;
+            elseif ($probability >= 0) $aggregated_data[$provenance]['quality_scores']['low']++;
+            else $aggregated_data[$provenance]['quality_scores']['unknown']++;
         }
     }
-    $channel_data = [];
-    foreach ($provenance_map as $trello_prov => $internal_name) {
-        $channel_data[$trello_prov] = ['cost' => $four_weeks_costs[$internal_name] ?? 0, 'leads' => 0, 'quality_scores' => ['high' => 0, 'medium' => 0, 'low' => 0, 'unknown' => 0]];
-    }
-    foreach ($recent_cards as $card) {
-        $provenance = wp_trello_get_card_provenance($card, $board_provenance_ids_map) ?? 'N/D';
-        if (isset($channel_data[$provenance])) {
-            $channel_data[$provenance]['leads']++;
-            $prob = $predictive_results[$card['id']] ?? -1;
-            if ($prob >= 0.7) $channel_data[$provenance]['quality_scores']['high']++;
-            elseif ($prob >= 0.4) $channel_data[$provenance]['quality_scores']['medium']++;
-            elseif ($prob >= 0) $channel_data[$provenance]['quality_scores']['low']++;
-            else $channel_data[$provenance]['quality_scores']['unknown']++;
-        }
-    }
+
+    // --- 5. Prepare data for OpenAI prompt ---
     $data_for_prompt = [];
-    foreach ($channel_data as $name => $data) {
+    foreach ($aggregated_data as $name => $data) {
         if ($data['leads'] == 0 && $data['cost'] == 0) continue;
         $cpl = ($data['leads'] > 0) ? round($data['cost'] / $data['leads'], 2) : 0;
-        $data_for_prompt[] = ['canale' => $name, 'costo_mensile' => $data['cost'], 'lead_generati_nel_mese' => $data['leads'], 'costo_per_lead' => $cpl, 'qualita_lead' => $data['quality_scores']];
+        $data_for_prompt[] = [
+            'canale' => $name,
+            'costo_mensile' => $data['cost'],
+            'lead_generati_nel_mese' => $data['leads'],
+            'costo_per_lead' => $cpl,
+            'qualita_lead' => $data['quality_scores']
+        ];
     }
-    if (empty($data_for_prompt)) return new WP_Error('no_marketing_data', 'Nessun dato di marketing o lead trovato per le ultime 4 settimane.');
 
+    if (empty($data_for_prompt)) {
+        return new WP_Error('no_aggregated_data', 'Nessun dato di marketing aggregato trovato per le ultime 4 settimane.');
+    }
+
+    // --- 6. Call OpenAI ---
     $prompt = stma_create_advisor_prompt($data_for_prompt);
     return stma_call_openai_api($prompt);
 }
