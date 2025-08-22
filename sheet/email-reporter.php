@@ -343,8 +343,13 @@ function stsg_format_predictive_data_as_table($data) {
 function stsg_get_marketing_advisor_report_data() {
     global $wpdb;
 
+    // Includi forzatamente i file necessari per garantire la disponibilità delle funzioni
+    $plugin_path = ABSPATH . 'wp-content/plugins/statistiche-trello/';
+    include_once($plugin_path . 'marketing-advisor/marketing-advisor-main.php');
+    include_once($plugin_path . 'marketing-advisor/marketing-advisor-ajax.php');
+
     if (!function_exists('wp_trello_get_marketing_data_with_leads_costs_v19') || !function_exists('stma_create_advisor_prompt') || !function_exists('stma_call_openai_api')) {
-        return new WP_Error('missing_functions', 'Le funzioni del modulo Marketing Advisor non sono disponibili.');
+        return new WP_Error('missing_functions', 'Le funzioni del modulo Marketing Advisor non sono ancora disponibili dopo l\'inclusione forzata.');
     }
 
     $provenance_map = ['iol' => 'italiaonline', 'chiamate' => 'chiamate', 'Organic Search' => 'organico', 'taormina' => 'taormina', 'fb' => 'facebook', 'Google Ads' => 'google ads', 'Subito' => 'subito', 'poolindustriale.it' => 'pool industriale', 'archiexpo' => 'archiexpo', 'Bakeka' => 'bakeka', 'Europage' => 'europage'];
