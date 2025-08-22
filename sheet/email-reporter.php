@@ -343,16 +343,12 @@ function stsg_format_predictive_data_as_table($data) {
 function stsg_get_marketing_advisor_report_data() {
     global $wpdb;
 
-    // Assicura che il file con le funzioni helper sia caricato, specialmente in contesto cron
-    include_once(ABSPATH . 'wp-content/plugins/statistiche-trello/marketing-advisor/marketing-advisor-ajax.php');
-
     if (!function_exists('wp_trello_get_marketing_data_with_leads_costs_v19') || !function_exists('stma_create_advisor_prompt') || !function_exists('stma_call_openai_api')) {
         return new WP_Error('missing_functions', 'Le funzioni del modulo Marketing Advisor non sono disponibili.');
     }
 
     $provenance_map = ['iol' => 'italiaonline', 'chiamate' => 'chiamate', 'Organic Search' => 'organico', 'taormina' => 'taormina', 'fb' => 'facebook', 'Google Ads' => 'google ads', 'Subito' => 'subito', 'poolindustriale.it' => 'pool industriale', 'archiexpo' => 'archiexpo', 'Bakeka' => 'bakeka', 'Europage' => 'europage'];
 
-    // Aggregazione costi su 4 settimane
     $marketing_data = wp_trello_get_marketing_data_with_leads_costs_v19();
     $four_weeks_costs = [];
     $today = new DateTime('now', new DateTimeZone('Europe/Rome'));
@@ -365,7 +361,6 @@ function stsg_get_marketing_advisor_report_data() {
         }
     }
 
-    // Recupero schede degli ultimi 28 giorni
     $twenty_eight_days_ago = new DateTime('-28 days', new DateTimeZone('Europe/Rome'));
     $trello_timestamp_28_days_ago = dechex($twenty_eight_days_ago->getTimestamp());
 
@@ -376,9 +371,12 @@ function stsg_get_marketing_advisor_report_data() {
     $board_provenance_ids_map = wp_trello_get_provenance_field_ids_map($board_ids, $apiKey, $apiToken);
     $recent_cards = [];
     foreach ($board_ids as $board_id) {
+        if(empty($board_id)) continue;
         $cards = get_trello_cards($board_id, $apiKey, $apiToken);
-        foreach ($cards as $card) {
-            if (hexdec(substr($card['id'], 0, 8)) >= $trello_timestamp_28_days_ago) $recent_cards[] = $card;
+        if (is_array($cards)) {
+            foreach ($cards as $card) {
+                if (hexdec(substr($card['id'], 0, 8)) >= $trello_timestamp_28_days_ago) $recent_cards[] = $card;
+            }
         }
     }
     $card_ids = array_column($recent_cards, 'id');
@@ -415,7 +413,8 @@ function stsg_get_marketing_advisor_report_data() {
     if (empty($data_for_prompt)) return new WP_Error('no_marketing_data', 'Nessun dato di marketing o lead trovato per le ultime 4 settimane.');
 
     $prompt = stma_create_advisor_prompt($data_for_prompt);
-    return stma_call_openai_api($prompt);
+    $openai_api_key = defined('OPENAI_API_KEY') ? OPENAI_API_KEY : '';
+    return stma_call_openai_api($prompt, $openai_api_key);
 }
 
 function stsg_format_marketing_advisor_data_as_html($data) {
