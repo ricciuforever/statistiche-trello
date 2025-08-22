@@ -188,8 +188,11 @@ PROMPT;
 
 /**
  * Funzione dedicata per chiamare l'API di OpenAI per il Marketing Advisor.
+ * @param string $prompt_text Il prompt da inviare a OpenAI.
+ * @param string $response_format Il formato di risposta desiderato ('json_object' o 'text').
+ * @return array|string|WP_Error La risposta da OpenAI o un oggetto WP_Error.
  */
-function stma_call_openai_api($prompt_text) {
+function stma_call_openai_api($prompt_text, $response_format = 'json_object') {
     if (!defined('OPENAI_API_KEY') || empty(OPENAI_API_KEY)) {
         return new WP_Error('api_key_missing', 'La chiave API di OpenAI non è definita.');
     }
@@ -198,15 +201,20 @@ function stma_call_openai_api($prompt_text) {
     $api_url = "https://api.openai.com/v1/chat/completions";
 
     $body = [
-        'model' => 'gpt-4o-mini',
+        'model' => ($response_format === 'json_object') ? 'gpt-4o-mini' : 'gpt-4o',
         'messages' => [['role' => 'user', 'content' => $prompt_text]],
-        'response_format' => ['type' => 'json_object'],
         'temperature' => 0.5,
     ];
 
+    if ($response_format === 'json_object') {
+        $body['response_format'] = ['type' => 'json_object'];
+    } else {
+        $body['max_tokens'] = 3500;
+    }
+
     $response = wp_remote_post($api_url, [
         'method'  => 'POST',
-        'timeout' => 90,
+        'timeout' => 180,
         'headers' => [
             'Content-Type'  => 'application/json',
             'Authorization' => 'Bearer ' . $api_key,
@@ -226,16 +234,19 @@ function stma_call_openai_api($prompt_text) {
     }
 
     $data = json_decode($response_body, true);
-    $json_content = $data['choices'][0]['message']['content'] ?? '';
+    $content = $data['choices'][0]['message']['content'] ?? '';
 
-    if (empty($json_content)) {
+    if (empty($content)) {
         return new WP_Error('empty_response', 'La risposta di OpenAI non contiene il campo "content".');
     }
 
-    $decoded_json = json_decode($json_content, true);
-    if (json_last_error() !== JSON_ERROR_NONE) {
-        return new WP_Error('json_decode_error', 'Il contenuto JSON estratto non è valido.', ['content' => $json_content]);
+    if ($response_format === 'json_object') {
+        $decoded_json = json_decode($content, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            return new WP_Error('json_decode_error', 'Il contenuto JSON estratto non è valido.', ['content' => $content]);
+        }
+        return $decoded_json;
     }
 
-    return $decoded_json;
+    return $content;
 }
