@@ -243,7 +243,7 @@ function stsg_get_openai_summary($report_data) {
     $prompt_text .= "Fornisci solo il paragrafo di riassunto, senza titoli o introduzioni.";
 
     $body = [
-        'model' => 'gpt-3.5-turbo',
+        'model' => 'gpt-4o-mini',
         'messages' => [
             ['role' => 'system', 'content' => 'Sei un analista di dati che scrive riassunti per report aziendali in italiano.'],
             ['role' => 'user', 'content' => $prompt_text]
