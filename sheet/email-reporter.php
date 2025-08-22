@@ -361,17 +361,44 @@ function stsg_get_marketing_advisor_report_data() {
         return new WP_Error('missing_functions', 'Una o più funzioni del modulo Marketing Advisor non sono disponibili.');
     }
 
-    // --- 1. Set Date Range (Last 28 days) ---
-    $end_date = new DateTime('now', new DateTimeZone('Europe/Rome'));
-    $start_date = (new DateTime('now', new DateTimeZone('Europe/Rome')))->modify('-28 days');
+    // --- 1. Fetch ALL Marketing Costs to Find the Last Relevant Week ---
+    $all_marketing_data = wp_trello_get_marketing_data_with_leads_costs_v19();
+    if (empty($all_marketing_data)) {
+        return new WP_Error('no_cost_data', 'Nessun dato sui costi di marketing trovato.');
+    }
+
+    // Find the last week with any cost data
+    $last_week_with_data = null;
+    $sorted_weeks = array_keys($all_marketing_data);
+    rsort($sorted_weeks); // Sort weeks descending
+
+    foreach ($sorted_weeks as $week) {
+        if (!empty($all_marketing_data[$week]['costs'])) {
+            $last_week_with_data = $week;
+            break;
+        }
+    }
+
+    if (is_null($last_week_with_data)) {
+        return new WP_Error('no_recent_cost_data', 'Nessun costo di marketing registrato in nessuna settimana.');
+    }
+
+    // --- 2. Define Dynamic Date Range (4 weeks ending on the last relevant week) ---
+    $year = (int)substr($last_week_with_data, 0, 4);
+    $week_no = (int)substr($last_week_with_data, 6, 2);
+
+    $end_date = new DateTime();
+    $end_date->setISODate($year, $week_no, 7); // End of the week (Sunday)
+    $end_date->setTime(23, 59, 59);
+
+    $start_date = (clone $end_date)->modify('-27 days')->setTime(0, 0, 0); // Start of the 4-week period
 
     $days_in_period = 28;
     $weeks_in_period = 4;
 
-    // --- 2. Fetch Marketing Costs ---
-    $all_marketing_data = wp_trello_get_marketing_data_with_leads_costs_v19();
+    // --- 3. Filter Marketing Costs for the Dynamic Range ---
     $marketing_costs = [];
-    foreach ($all_marketing_data as $week_data) {
+    foreach ($all_marketing_data as $week_key => $week_data) {
         if (isset($week_data['start_date_obj']) && $week_data['start_date_obj'] >= $start_date && $week_data['start_date_obj'] <= $end_date) {
             foreach ($week_data['costs'] as $p => $c) {
                 $marketing_costs[$p] = ($marketing_costs[$p] ?? 0) + $c;
