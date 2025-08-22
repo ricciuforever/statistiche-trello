@@ -1,0 +1,11 @@
+{
+    "name": "ama-srl/trello-stats-plugin",
+    "description": "Plugin WordPress per statistiche Trello e integrazioni varie.",
+    "type": "wordpress-plugin",
+    "require": {
+        "google/apiclient": "^2.15"
+    },
+    "config": {
+        "process-timeout": 600
+    }
+}
