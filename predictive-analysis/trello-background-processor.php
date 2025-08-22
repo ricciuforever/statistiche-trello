@@ -1,17 +1,17 @@
 <?php
 /**
  * Modulo per l'Elaborazione in Background e Salvataggio Permanente
- * dell'Analisi Predittiva Trello tramite WP-Cron. (Versione 4.9 - DB Upgrade Fix)
+ * dell'Analisi Predittiva Trello tramite WP-Cron. (Versione 5.0 - Robustezza e Stabilità AI)
  */
 
 if (!defined('ABSPATH')) exit;
 
 // --- Costanti del Plugin ---
-define('STPA_VERSION', '1.1.0');
+define('STPA_VERSION', '1.3.0');
 define('STPA_DB_VERSION_OPTION', 'stpa_db_version');
 
 global $wpdb;
-define('STPA_RESULTS_TABLE', $wpdb->prefix . 'stpa_predictive_results');
+define('STPA_RESULTS_TABLE', 'wpmq_stpa_predictive_results');
 define('STPA_QUEUE_TABLE', $wpdb->prefix . 'stpa_analysis_queue');
 define('STPA_QUEUE_OPTION', 'stpa_background_analysis_queue');
 define('STPA_CARDS_CACHE_TABLE', $wpdb->prefix . 'stpa_trello_cards_cache');
@@ -51,17 +51,23 @@ function stpa_create_cards_cache_table() {
         board_id VARCHAR(50) NOT NULL,
         card_name TEXT NOT NULL,
         card_url VARCHAR(255) NOT NULL,
+        provenance VARCHAR(255) NULL,
         date_last_activity DATETIME NOT NULL,
         is_numeric_name BOOLEAN NOT NULL DEFAULT FALSE,
+        is_archived BOOLEAN NOT NULL DEFAULT FALSE,
+        in_archived_list BOOLEAN NOT NULL DEFAULT FALSE,
         last_synced_at DATETIME NOT NULL,
         PRIMARY KEY  (id),
         INDEX card_id_idx (card_id),
         INDEX board_id_idx (board_id),
         INDEX date_last_activity_idx (date_last_activity),
-        INDEX is_numeric_name_idx (is_numeric_name)
+        INDEX is_numeric_name_idx (is_numeric_name),
+        INDEX is_archived_idx (is_archived),
+        INDEX in_archived_list_idx (in_archived_list)
     ) $charset_collate;";
     dbDelta($sql);
 }
+
 
 function stpa_create_queue_table() {
     global $wpdb;
@@ -140,7 +146,7 @@ function stpa_process_batch_cron_job() {
     }
 
     $analysis_id = $queue_meta['analysis_id'];
-    $batch_size = 100;
+    $batch_size = 5;
 
     $card_ids_to_process = $wpdb->get_col($wpdb->prepare(
         "SELECT card_id FROM $queue_table WHERE analysis_id = %s AND status = 'pending' LIMIT %d",
@@ -170,23 +176,42 @@ function stpa_process_batch_cron_job() {
     $benchmark_text = $queue_meta['benchmark_text'] ?? '';
     $analysis_results = stpa_call_openai_api($cards_data_for_ai, $queue_meta['periods'], $benchmark_text);
 
-    if (!empty($analysis_results)) {
-        foreach ($analysis_results as $card_analysis) {
-            if (!empty($card_analysis['predictions'])) {
-                foreach ($card_analysis['predictions'] as $prediction) {
-                    $card_details_for_save = stpa_get_card_details($card_analysis['card_id']);
-                    $data_to_save = [
-                        'analysis_id' => $analysis_id,
-                        'period'      => $prediction['period'],
-                        'card_id'     => $card_analysis['card_id'],
-                        'card_name'   => $card_details_for_save['name'],
-                        'card_url'    => $card_details_for_save['url'],
-                        'probability' => $prediction['probability'],
-                        'reasoning'   => $prediction['reasoning'],
-                        'created_at'  => current_time('mysql')
-                    ];
-                    $wpdb->replace($results_table, $data_to_save);
-                }
+    // --- NUOVA LOGICA DI GESTIONE ERRORE ---
+    // Se la chiamata API fallisce o restituisce dati vuoti, non procediamo e non marchiamo come completato.
+    // Il cron riproverà al prossimo ciclo.
+    if (empty($analysis_results)) {
+        error_log("[Trello Analysis] ERRORE CRITICO: La chiamata a OpenAI per il batch non ha restituito risultati. Il lotto verrà riprovato. ID Analisi: " . $analysis_id);
+        // Ripristiniamo lo stato a 'pending' per un nuovo tentativo
+        $wpdb->query($wpdb->prepare(
+            "UPDATE $queue_table SET status = 'pending' WHERE analysis_id = %s AND card_id IN ($ids_placeholder)",
+            array_merge([$analysis_id], $card_ids_to_process)
+        ));
+        return; // Interrompe l'esecuzione per questo ciclo
+    }
+
+    $valid_card_ids_in_batch = array_flip($card_ids_to_process);
+    foreach ($analysis_results as $card_analysis) {
+        $response_card_id = $card_analysis['card_id'] ?? null;
+
+        if (!$response_card_id || !isset($valid_card_ids_in_batch[$response_card_id])) {
+            error_log("[Trello Analysis] Corruzione dati AI: l'ID '{$response_card_id}' non era nel batch. Risultato scartato.");
+            continue;
+        }
+
+        if (!empty($card_analysis['predictions'])) {
+            foreach ($card_analysis['predictions'] as $prediction) {
+                $card_details_for_save = stpa_get_card_details($response_card_id);
+                $data_to_save = [
+                    'analysis_id' => $analysis_id,
+                    'period'      => $prediction['period'],
+                    'card_id'     => $response_card_id,
+                    'card_name'   => $card_details_for_save['name'],
+                    'card_url'    => $card_details_for_save['url'],
+                    'probability' => $prediction['probability'],
+                    'reasoning'   => $prediction['reasoning'],
+                    'created_at'  => current_time('mysql')
+                ];
+                $wpdb->replace(STPA_RESULTS_TABLE, $data_to_save);
             }
         }
     }
@@ -222,7 +247,7 @@ function stpa_finalize_analysis($queue_meta) {
 if (!function_exists('stpa_call_openai_api')) {
     function stpa_call_openai_api($cards_data, $periods, $benchmark_text = '') {
         if (!defined('OPENAI_API_KEY') || empty(OPENAI_API_KEY)) {
-            error_log('[Trello Analysis] ERRORE FATALE: La chiave API di OpenAI (OPENAI_API_KEY) non è definita nel file wp-config.php.');
+            error_log('[Trello Analysis] ERRORE FATALE: La chiave API OpenAI non è definita in wp-config.php.');
             return [];
         }
 
@@ -236,61 +261,64 @@ if (!function_exists('stpa_call_openai_api')) {
         $periods_string = implode(', ', $periods);
         $cards_json = json_encode($cards_data, JSON_UNESCAPED_UNICODE);
 
+        // --- NUOVO PROMPT MIGLIORATO ---
         $prompt_text = <<<PROMPT
-Sei un'analista di vendita senior per un'azienda italiana di arredamento. Il tuo compito è valutare il potenziale dei lead basandoti sulle loro interazioni registrate in Trello. Sii analitico, conciso e professionale.
+Sei un'analista di vendita senior per un'azienda italiana di tendostrutture. Il tuo compito è valutare il potenziale dei lead basandoti sulle interazioni registrate in Trello.
 
 **OBIETTIVO:**
-Per ogni lead (scheda Trello), analizza i commenti e fornisci una stima di probabilità di chiusura (conversione in vendita) per i seguenti periodi futuri: $periods_string giorni.
+Per OGNI lead fornito, analizza i commenti e fornisci una stima di probabilità di chiusura per **TUTTI** i seguenti periodi futuri: $periods_string giorni. È OBBLIGATORIO che ogni scheda abbia una previsione per ogni singolo periodo.
 
 **REGOLE DI ANALISI (Fattori Chiave):**
-- **Segnali Molto Positivi (alta probabilità):**
-  - Menzione di un "sopralluogo" o appuntamento fissato. Questo è il segnale più forte.
-  - Richieste multiple di preventivi o revisioni di preventivi.
-- **Segnali Positivi (probabilità media-alta):**
-  - Cliente molto reattivo, pochi "solleciti" da parte nostra.
-  - Conversazioni dettagliate e tecniche sul prodotto.
-- **Segnali Negativi (bassa probabilità):**
-  - Lunghi periodi di silenzio o inattività.
-  - Commenti vaghi, richieste di informazioni generiche senza seguito.
-  - Menzione esplicita di competitor o insoddisfazione per il prezzo.
-- **Contesto Aggiuntivo:**
-  - Considera l'agente assegnato e l'etichetta di "temperatura" se disponibili, ma basa il tuo giudizio principalmente sul contenuto della conversazione.
+- **Priorità Assoluta (Chiusura Negativa):** Se un cliente è "scocciato", "scoglionato", chiede di non essere più contattato, o dice esplicitamente "non sono interessato", "ho scelto un altro", la probabilità per tutti i periodi è quasi zero (0.01). Questa regola ignora qualsiasi commento positivo precedente.
+- **Segnali Molto Negativi (bassa probabilità):** Lunghi silenzi, commenti vaghi ("ci penso"), problemi di budget, richieste di ricontatto a lunghissimo termine.
+- **Segnali Molto Positivi (alta probabilità):** Menzione di "sopralluogo" fissato, pagamento imminente ("ho fatto il bonifico"), conferma esplicita ("procediamo", "confermo ordine").
+- **Segnali Positivi (media probabilità):** Cliente molto reattivo, conversazioni tecniche dettagliate, richieste di revisione preventivo.
+- **Regola Fondamentale:** L'ULTIMO commento significativo del cliente ha sempre il peso maggiore.
+- **Nessun Commento:** Se una scheda non ha commenti o solo log di sistema, assegna una probabilità di base molto bassa (es. 0.05) per tutti i periodi con la motivazione "Nessuna interazione umana significativa registrata.".
+- **Lingua:** La tua intera risposta, motivazioni (`reasoning`) incluse, deve essere esclusivamente in italiano.
 
 **FORMATO DI OUTPUT OBBLIGATORIO:**
-La tua risposta deve essere **esclusivamente** un oggetto JSON valido. Non includere testo, spiegazioni o markdown prima o dopo il JSON. La struttura deve essere la seguente:
+La tua risposta deve essere **ESCLUSIVAMENTE** un oggetto JSON valido. Non includere testo o markdown prima o dopo il JSON. Per ogni `card_id` nell'input, deve esserci un oggetto corrispondente nell'output `data`. Ogni oggetto deve contenere un array `predictions` con un elemento per **CIASCUN** periodo richiesto ($periods_string).
+
 {
   "data": [
     {
-      "card_id": "ID_DELLA_SCHEDA",
+      "card_id": "ID_SCHEDA_1",
       "predictions": [
-        {
-          "period": 30,
-          "probability": 0.75,
-          "reasoning": "La probabilità a 30 giorni è alta (75%) perché il cliente ha richiesto una revisione del preventivo e ha menzionato un possibile sopralluogo. La comunicazione è reattiva, con risposte entro 24 ore. Questo indica un forte interesse e un avanzamento concreto nella trattativa. Il lead sembra ben qualificato e sta valutando attivamente l'acquisto."
-        }
+        {"period": 30, "probability": 0.75, "reasoning": "Motivazione concisa per il periodo a 30 giorni..."},
+        {"period": 60, "probability": 0.80, "reasoning": "Motivazione concisa per il periodo a 60 giorni..."},
+        {"period": 90, "probability": 0.85, "reasoning": "Motivazione concisa per il periodo a 90 giorni..."}
+        // ...e così via per tutti gli altri periodi
+      ]
+    },
+    {
+      "card_id": "ID_SCHEDA_2",
+      "predictions": [
+        {"period": 30, "probability": 0.10, "reasoning": "Motivazione per 30 giorni..."},
+        {"period": 60, "probability": 0.15, "reasoning": "Motivazione per 60 giorni..."},
+        {"period": 90, "probability": 0.20, "reasoning": "Motivazione per 90 giorni..."}
+        // ...etc.
       ]
     }
   ]
 }
 
-**REGOLE SUL JSON:**
-1.  **`probability`**: Un numero decimale (float) tra 0.0 e 1.0.
-2.  **`reasoning`**: Una stringa concisa in italiano (circa 80-120 parole) che spiega la logica dietro la stima di probabilità più alta.
-3.  **Dati da Analizzare**: Ecco l'array di schede da elaborare: $cards_json
+**DATI DA ANALIZZARE:**
+$cards_json
 PROMPT;
 
-        $prompt_text = $benchmark_prompt_part . $prompt_text;
-
+        $full_prompt = $benchmark_prompt_part . $prompt_text;
+        
         $body = [
             'model' => 'gpt-4o-mini',
-            'messages' => [['role' => 'user', 'content' => $prompt_text]],
+            'messages' => [['role' => 'user', 'content' => $full_prompt]],
             'response_format' => ['type' => 'json_object'],
-            'temperature' => 0.7,
+            'temperature' => 0.5, // Leggermente ridotta per maggiore coerenza
         ];
 
         $response = wp_remote_post($api_url, [
             'method'  => 'POST',
-            'timeout' => 60,
+            'timeout' => 120, // Aumentato a 2 minuti per lotti complessi
             'headers' => [
                 'Content-Type'  => 'application/json',
                 'Authorization' => 'Bearer ' . $api_key,
@@ -299,7 +327,7 @@ PROMPT;
         ]);
 
         if (is_wp_error($response)) {
-            error_log('[Trello Analysis] ERRORE WP_Error: ' . $response->get_error_message());
+            error_log('[Trello Analysis OpenAI] ERRORE WP_Error: ' . $response->get_error_message());
             return [];
         }
 
@@ -307,34 +335,36 @@ PROMPT;
         $response_body = wp_remote_retrieve_body($response);
 
         if ($http_code !== 200) {
-            error_log('[Trello Analysis] ERRORE: La chiamata API ha fallito con codice ' . $http_code . '. Risposta: ' . $response_body);
+            error_log('[Trello Analysis OpenAI] ERRORE: La chiamata API ha fallito con codice ' . $http_code . '. Risposta: ' . $response_body);
             return [];
         }
 
         $data = json_decode($response_body, true);
         if (json_last_error() !== JSON_ERROR_NONE) {
-            error_log('[Trello Analysis] ERRORE: La risposta di OpenAI non è un JSON valido.');
+            error_log('[Trello Analysis OpenAI] ERRORE: La risposta di OpenAI non è un JSON valido.');
             return [];
         }
 
+        // --- RIPRISTINATO: Estrazione del contenuto dalla risposta di OpenAI ---
         $json_content = $data['choices'][0]['message']['content'] ?? '';
         if (empty($json_content)) {
-            error_log('[Trello Analysis] ERRORE: La risposta di OpenAI non contiene il campo "content".');
+            error_log('[Trello Analysis OpenAI] ERRORE: La risposta di OpenAI non contiene il campo "content".');
             return [];
         }
 
         $decoded_json = json_decode($json_content, true);
         if (json_last_error() !== JSON_ERROR_NONE) {
-            error_log('[Trello Analysis] ERRORE: Il contenuto JSON estratto non è valido. Contenuto: ' . $json_content);
+            error_log('[Trello Analysis OpenAI] ERRORE: Il contenuto JSON estratto non è valido. Contenuto: ' . $json_content);
             return [];
         }
 
         if (isset($decoded_json['data']) && is_array($decoded_json['data'])) {
             return $decoded_json['data'];
         }
-        return $decoded_json;
+        return []; // Restituisce array vuoto se il formato non è corretto
     }
 }
+
 
 if (!function_exists('stpa_filter_irrelevant_comments')) {
     function stpa_filter_irrelevant_comments($comments) {
@@ -354,7 +384,8 @@ if (!function_exists('stpa_filter_irrelevant_comments')) {
             '#^Reference: \[REF\d+\]#i',
             '#^To: .*?Cc: .*?#i',
             '#inoltrata email da ArchiExpo#i',
-            '#resendprev: Esito = (?:Richiamato|PD|Segreteria|Chiamato|Email Inviata|Non interessato|Annullato)#i',
+            '#^aspetto risposta dal fornitore#i',
+            '#_prev\. per #i',
             '#^Bonjour,#i',
             '#^Bonsoir,#i',
             '#\\[Email\\]\(https?://app\.sendboard\.com/#i',

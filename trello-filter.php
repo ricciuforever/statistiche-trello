@@ -2,6 +2,7 @@
 
 // Funzione per generare il filtro delle provenienze (checkbox)
 function generate_provenance_filter($cards_for_this_filter_counts, $board_provenance_ids_map) {
+    // ... la logica interna di questa funzione non cambia ...
     $provenances = [];
     $nd_provenance_label = 'N/D (Non specificata)'; 
 
@@ -53,6 +54,7 @@ function generate_provenance_filter($cards_for_this_filter_counts, $board_proven
     echo '</fieldset>';
 }
 
+// *** MODIFICATA SIGNIFICATIVAMENTE PER USARE UN SELECT MULTIPLO ***
 function generate_state_filter_from_labels($cards_for_this_filter_counts) {
     $states = [];
      if (is_array($cards_for_this_filter_counts)) {
@@ -72,20 +74,26 @@ function generate_state_filter_from_labels($cards_for_this_filter_counts) {
     }
     ksort($states);
     $selectedStates_from_GET = isset($_GET['states']) ? (array) $_GET['states'] : [];
+    
     echo '<fieldset class="uk-fieldset uk-margin-bottom">';
     echo '<legend class="uk-legend">Filtra per Stato:</legend>';
     if (empty($states)) {
         echo '<p>Nessuno stato corrispondente.</p>';
     } else {
+        // Usa un select multiplo con classe uk-select
+        echo '<select class="uk-select" name="states[]" multiple size="8">';
         foreach ($states as $state_item => $count) {
-            $checked = in_array($state_item, $selectedStates_from_GET) ? 'checked' : '';
-            echo '<div class="uk-margin-small"><label class="uk-form-label"><input class="uk-checkbox" type="checkbox" name="states[]" value="' . esc_attr($state_item) . '" ' . $checked . '> ' . esc_html($state_item) . ' (' . $count . ')</label></div>';
+            $selected = in_array($state_item, $selectedStates_from_GET) ? 'selected' : '';
+            echo '<option value="' . esc_attr($state_item) . '" ' . $selected . '>' . esc_html($state_item) . ' (' . $count . ')</option>';
         }
+        echo '</select>';
+        echo '<div class="uk-text-meta uk-margin-small-top">Tieni premuto Ctrl (o Cmd su Mac) per selezionare più opzioni.</div>';
     }
     echo '</fieldset>';
 }
 
 function generate_temperature_filter($cards_for_this_filter_counts) {
+    // ... la logica interna di questa funzione non cambia ...
     $temperatures = [];
     if (is_array($cards_for_this_filter_counts)) {
         foreach ($cards_for_this_filter_counts as $card) {
@@ -105,8 +113,9 @@ function generate_temperature_filter($cards_for_this_filter_counts) {
             }
         }
     }
-    ksort($temperatures); 
+    ksort($temperatures);
     $selectedTemperatures_from_GET = isset($_GET['temperatures']) ? (array) $_GET['temperatures'] : [];
+
     echo '<fieldset class="uk-fieldset uk-margin-bottom">';
     echo '<legend class="uk-legend">Filtra per Temperatura:</legend>';
      if (empty($temperatures)) {
@@ -120,23 +129,13 @@ function generate_temperature_filter($cards_for_this_filter_counts) {
     echo '</fieldset>';
 }
 
-// Modificato per accettare e usare $current_lead_source
-function generate_combined_filters($base_cards_for_all_filtering, $board_provenance_ids_map, $current_lead_source = 'trello') {
+// *** MODIFICATO per rimuovere lo switcher "Fonte Lead" e usare classi Bootstrap ***
+function generate_combined_filters($base_cards_for_all_filtering, $board_provenance_ids_map) {
     echo '<form method="get" class="uk-form-stacked">'; 
     echo '<input type="hidden" name="page" value="wp-trello-plugin">';
 
-    // --- Switcher Fonte Lead ---
-    echo '<fieldset class="uk-fieldset uk-margin-bottom">';
-    echo '<legend class="uk-legend">Fonte Lead per Grafici/Riepilogo:</legend>';
-    echo '<div class="uk-margin-small">';
-    echo '<label><input class="uk-radio" type="radio" name="lead_source" value="trello" ' . checked($current_lead_source, 'trello', false) . '> Lead da Trello</label>';
-    echo '</div>';
-    echo '<div class="uk-margin-small">';
-    echo '<label><input class="uk-radio" type="radio" name="lead_source" value="csv" ' . checked($current_lead_source, 'csv', false) . '> Lead da CSV</label>';
-    echo '</div>';
-    echo '</fieldset>';
-
-
+    // --- Switcher Fonte Lead RIMOSSO ---
+    
     $active_provenances = isset($_GET['provenances']) ? (array) $_GET['provenances'] : [];
     $active_states = isset($_GET['states']) ? (array) $_GET['states'] : [];
     $active_temperatures = isset($_GET['temperatures']) ? (array) $_GET['temperatures'] : [];
@@ -156,6 +155,11 @@ function generate_combined_filters($base_cards_for_all_filtering, $board_provena
     if (!empty($active_states)) $cards_for_temperature_counts = filter_cards_by_state_from_labels($cards_for_temperature_counts, $active_states);
     generate_temperature_filter($cards_for_temperature_counts);
     
+    echo '<hr>';
+
+    $dateFrom_from_GET = isset($_GET['date_from']) ? esc_attr($_GET['date_from']) : '';
+    $dateTo_from_GET = isset($_GET['date_to']) ? esc_attr($_GET['date_to']) : '';
+
     echo '<div class="uk-margin-top">'; 
     $dateFrom_from_GET = isset($_GET['date_from']) ? esc_attr($_GET['date_from']) : '';
     $dateTo_from_GET = isset($_GET['date_to']) ? esc_attr($_GET['date_to']) : '';
@@ -165,6 +169,7 @@ function generate_combined_filters($base_cards_for_all_filtering, $board_provena
     echo '</div>'; 
     echo '</form>'; 
 }
+
 
 function filter_cards_by_provenance($cards_to_filter, $selectedProvenances, $board_provenance_ids_map) {
     if (empty($selectedProvenances) || !is_array($cards_to_filter)) return $cards_to_filter;

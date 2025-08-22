@@ -19,13 +19,11 @@ document.addEventListener('DOMContentLoaded', function() {
             html = `
                 <div class="stpa-control-group">
                     <label>Schede per Batch:</label>
-                    <input type="text" id="stpa-batch-size-display" value="100 (Fisso)" disabled class="uk-input">
-                    <input type="hidden" id="stpa-batch-size" value="100">
+                    <input type="text" id="stpa-batch-size-display" value="10 (Fisso)" disabled>
                 </div>
                 <div class="stpa-control-group">
                     <label>Limite Schede (0=tutte):</label>
-                    <input type="number" id="stpa-max-cards" value="3000" min="0" step="100">
-                </div>
+                        <input type="number" id="stpa-max-cards" value="0" min="0" step="100">                </div>
                 <button id="stpa-start-btn" class="stpa-button-primary">🚀 Avvia Nuova Analisi</button>
             `;
             if(status.status === 'completed' || status.status === 'stalled' || status.status === 'completed_with_errors') {
@@ -109,12 +107,12 @@ document.addEventListener('DOMContentLoaded', function() {
             e.target.textContent = 'Avvio...';
 
             const maxCardsForAnalysis = document.getElementById('stpa-max-cards').value;
-            if (maxCardsForAnalysis <= 0) {
-                alert('Il limite di schede per l\'analisi deve essere maggiore di zero.');
-                e.target.disabled = false;
-                e.target.textContent = '🚀 Avvia Nuova Analisi';
-                return;
-            }
+            // if (maxCardsForAnalysis <= 0) {
+            //     alert('Il limite di schede per l\'analisi deve essere maggiore di zero.');
+            //     e.target.disabled = false;
+            //     e.target.textContent = '🚀 Avvia Nuova Analisi';
+            //     return;
+            // }
 
             const formData = new FormData();
             formData.append('action', 'stpa_predictive_analysis');
@@ -179,13 +177,18 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function renderTabContent(period) {
-        const results = currentResults[period] || [];
-        const stats = calculateStats(results);
+        const allResultsForPeriod = currentResults[period] || [];
+        
+        // --- MODIFICA CHIAVE: Filtra i risultati per probabilità >= 70% ---
+        const results = allResultsForPeriod.filter(r => parseFloat(r.probability) >= 0.7);
+
+        const stats = calculateStats(allResultsForPeriod); // Le statistiche generali usano ancora tutti i risultati
+        const filteredStats = calculateStats(results); // Statistiche solo per i risultati filtrati
         const tabContentEl = document.getElementById('stpa-tab-content');
 
         let tableRowsHtml = '';
         if (results.length === 0) {
-            tableRowsHtml = `<tr><td colspan="4" style="text-align:center; padding: 20px;"><em>Nessun risultato da mostrare per questo periodo. Avvia una nuova analisi o attendi i progressi.</em></td></tr>`;
+            tableRowsHtml = `<tr><td colspan="4" style="text-align:center; padding: 20px;"><em>Nessun risultato con probabilità superiore al 70% per questo periodo.</em></td></tr>`;
         } else {
             tableRowsHtml = results.map((r, i) => `
                 <tr>
@@ -198,11 +201,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
         tabContentEl.innerHTML = `
             <div class="stpa-stats-summary">
-                <div class="stpa-stat-card high"><h4>Alta Prob.</h4><div class="stpa-stat-number">${stats.high}</div></div>
-                <div class="stpa-stat-card medium"><h4>Media Prob.</h4><div class="stpa-stat-number">${stats.medium}</div></div>
-                <div class="stpa-stat-card low"><h4>Bassa Prob.</h4><div class="stpa-stat-number">${stats.low}</div></div>
+                <div class="stpa-stat-card high"><h4>Alta Prob.</h4><div class="stpa-stat-number">${filteredStats.high}</div></div>
+                <div class="stpa-stat-card medium"><h4>Media Prob.</h4><div class="stpa-stat-number">${filteredStats.medium}</div></div>
+                <div class="stpa-stat-card low"><h4>Bassa Prob.</h4><div class="stpa-stat-number">${filteredStats.low}</div></div>
             </div>
-            <h4>Top ${results.length} Schede con Maggiore Probabilità</h4>
+            <h4>Top ${results.length} Schede (con prob. >= 70%)</h4>
             <div class="stpa-results-table">
                 <table>
                     <thead><tr><th>Pos.</th><th>Nome Scheda</th><th>Probabilità</th><th>Motivazione Analisi</th></tr></thead>
@@ -242,6 +245,6 @@ document.addEventListener('DOMContentLoaded', function() {
     checkStatus();
 
     if (stpa_data.last_analysis_status.status === 'running') {
-        statusInterval = setInterval(checkStatus, 15000); // MODIFICATO: 5s -> 15s
+        statusInterval = setInterval(checkStatus, 15000);
     }
 });

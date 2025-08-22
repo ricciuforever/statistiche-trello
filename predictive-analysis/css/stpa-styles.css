@@ -1,1 +1,63 @@
-.stpa-dashboard{background:#fff;border:1px solid #e0e0e0;border-radius:8px;padding:25px;margin:20px 0}.stpa-header{text-align:center;margin-bottom:30px;border-bottom:1px solid #eee;padding-bottom:20px}.stpa-header h2{color:#2c3e50}.stpa-header p{color:#7f8c8d;font-size:16px}.stpa-status-container{padding:20px;border-radius:8px;margin-bottom:20px;border:1px solid #eee}.stpa-status-idle{background-color:#f0f8ff}.stpa-status-running{background-color:#fffbe6}.stpa-status-completed{background-color:#f0fff0}.stpa-status-stalled{background-color:#fff0f0}.stpa-controls{display:flex;gap:20px;align-items:flex-end;margin-bottom:30px}.stpa-control-group{display:flex;flex-direction:column}.stpa-button-primary{background:#3498db;color:white;border:none;padding:10px 20px;border-radius:4px;cursor:pointer}.stpa-button-secondary{background:#e74c3c;color:white;border:none;padding:10px 20px;border-radius:4px;cursor:pointer}.stpa-progress-bar{width:100%;background:#ecf0f1;border-radius:10px;overflow:hidden;height:20px;margin-top:10px}.stpa-progress-fill{width:0%;height:100%;background:linear-gradient(90deg,#2ecc71,#27ae60);transition:width .4s ease}.stpa-results-header{border-bottom:1px solid #eee;padding-bottom:15px;margin-bottom:20px}.stpa-tab-nav{display:flex;border-bottom:1px solid #e0e0e0;margin-bottom:20px}.stpa-tab-button{background:0 0;border:none;padding:15px 20px;cursor:pointer;border-bottom:3px solid transparent}.stpa-tab-button.active{border-bottom-color:#3498db;color:#3498db;font-weight:600}.stpa-tab-period{display:block;font-size:14px}.stpa-tab-stats{display:block;font-size:12px;color:#7f8c8d;margin-top:4px}.stpa-stats-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:20px;margin-bottom:30px}.stpa-stat-card{padding:20px;border-radius:8px;text-align:center;color:#fff}.stpa-stat-card.high{background:#2ecc71}.stpa-stat-card.medium{background:#f1c40f}.stpa-stat-card.low{background:#e74c3c}.stpa-stat-number{font-size:28px;font-weight:700}.stpa-results-table{width:100%;border-collapse:collapse}.stpa-results-table th,.stpa-results-table td{padding:12px;text-align:left;border-bottom:1px solid #eee}.stpa-results-table th{background:#f9f9f9}.stpa-card-name{color:#3498db;text-decoration:none;font-weight:500}.stpa-probability.high{color:#27ae60}.stpa-probability.medium{color:#f39c12}.stpa-probability.low{color:#c0392b}
+/* --- TEMA PERSONALIZZATO ANALISI PREDITTIVA --- */
+
+/* Variabili Colore */
+:root {
+    --brand-primary: #9C2020;
+    --brand-primary-hover: #B82828;
+    --brand-dark: #222222;
+    --brand-success: #28a745; /* Verde Successo (mantenuto per chiarezza) */
+    --brand-warning: #ffc107; /* Giallo Attenzione (mantenuto) */
+    --brand-danger: #dc3545; /* Rosso Pericolo (mantenuto) */
+}
+
+.stpa-dashboard { background: #fff; border: 1px solid #e0e0e0; border-radius: 4px; padding: 25px; margin: 20px 0; }
+.stpa-header { text-align: center; margin-bottom: 30px; border-bottom: 1px solid #eee; padding-bottom: 20px; }
+.stpa-header h2 { color: var(--brand-dark); }
+.stpa-header p { color: #555; font-size: 16px; }
+
+.stpa-status-container { padding: 20px; border-radius: 4px; margin-bottom: 20px; border-left: 5px solid; }
+.stpa-status-idle { background-color: #f8f9fa; border-left-color: #6c757d; }
+.stpa-status-running { background-color: #fff3cd; border-left-color: var(--brand-warning); }
+.stpa-status-completed { background-color: #d4edda; border-left-color: var(--brand-success); }
+.stpa-status-stalled, .stpa-status-completed_with_errors { background-color: #f8d7da; border-left-color: var(--brand-danger); }
+
+.stpa-controls { display: flex; gap: 15px; align-items: flex-end; margin-bottom: 30px; }
+.stpa-control-group { display: flex; flex-direction: column; }
+.stpa-control-group label { margin-bottom: 5px; font-weight: 500; color: #333; }
+.stpa-control-group input { padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px; }
+
+.stpa-button-primary { background: var(--brand-primary); color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; transition: background-color 0.2s; }
+.stpa-button-primary:hover { background: var(--brand-primary-hover); }
+.stpa-button-secondary { background: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; transition: background-color 0.2s; }
+.stpa-button-secondary:hover { background: #5a6268; }
+
+.stpa-progress-bar { width: 100%; background: #e9ecef; border-radius: 10px; overflow: hidden; height: 20px; margin-top: 10px; }
+.stpa-progress-fill { width: 0%; height: 100%; background: var(--brand-success); transition: width .4s ease; }
+
+.stpa-results-header { border-bottom: 1px solid #eee; padding-bottom: 15px; margin-bottom: 20px; }
+
+.stpa-tab-nav { display: flex; border-bottom: 1px solid #e0e0e0; margin-bottom: 20px; }
+.stpa-tab-button { background: 0 0; border: none; padding: 15px 20px; cursor: pointer; border-bottom: 3px solid transparent; color: #555; }
+.stpa-tab-button.active { border-bottom-color: var(--brand-primary); color: var(--brand-primary); font-weight: 600; }
+.stpa-tab-period { display: block; font-size: 14px; }
+.stpa-tab-stats { display: block; font-size: 12px; color: #7f8c8d; margin-top: 4px; }
+
+.stpa-stats-summary { display: grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap: 20px; margin-bottom: 30px; }
+.stpa-stat-card { padding: 20px; border-radius: 8px; text-align: center; color: #fff; }
+.stpa-stat-card.high { background: var(--brand-success); }
+.stpa-stat-card.medium { background: var(--brand-warning); color: var(--brand-dark); }
+.stpa-stat-card.low { background: var(--brand-danger); }
+.stpa-stat-number { font-size: 28px; font-weight: 700; }
+.stpa-stat-card h4 { color: white; margin-bottom: 5px; font-size: 1rem; }
+.stpa-stat-card.medium h4 { color: var(--brand-dark); }
+
+
+.stpa-results-table table { width: 100%; border-collapse: collapse; }
+.stpa-results-table th, .stpa-results-table td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
+.stpa-results-table th { background: #f9f9f9; color: var(--brand-dark); }
+.stpa-results-table a.stpa-card-name { color: var(--brand-primary); text-decoration: none; font-weight: 500; }
+.stpa-results-table a.stpa-card-name:hover { color: var(--brand-primary-hover); }
+
+.stpa-probability.high { color: var(--brand-success); font-weight: bold; }
+.stpa-probability.medium { color: var(--brand-warning); font-weight: bold; }
+.stpa-probability.low { color: var(--brand-danger); font-weight: bold; }

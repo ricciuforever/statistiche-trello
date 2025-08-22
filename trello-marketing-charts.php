@@ -5,16 +5,12 @@
 
 if (!defined('ABSPATH')) exit;
 
-// Assicurati che le funzioni helper CSV da trello-csv-parser.php siano disponibili
-// wp_trello_csv_clean_value(), wp_trello_csv_parse_week_string_to_iso(), wp_trello_csv_get_iso_week_range()
-
 /**
  * Recupera e processa i dati dei COSTI e dei LEAD marketing dal Google Sheet CSV.
  */
 if (!function_exists('wp_trello_get_marketing_data_with_leads_costs_v19')) {
     function wp_trello_get_marketing_data_with_leads_costs_v19($start_date_threshold_str = '2024-12-30') { 
-        // CAMBIATO: Uso una nuova chiave per forzare l'aggiornamento della cache
-        $transient_key = 'wp_trello_mkt_data_lc_v7_all_data'; 
+        $transient_key = 'wp_trello_mkt_data_lc_v8_all_data';
         $cached_data = get_transient($transient_key);
         if (false !== $cached_data) return $cached_data;
 
@@ -36,7 +32,7 @@ if (!function_exists('wp_trello_get_marketing_data_with_leads_costs_v19')) {
         $last_col_name = end($all_csv_headers);   
 
         foreach($all_csv_headers as $header_name_csv) {
-            if ($header_name_csv === $first_col_name || $header_name_csv === $last_col_name) continue;
+            if ($header_name_csv === $first_col_name || $header_name_csv === 'Settimana Chiave' || $header_name_csv === $last_col_name) continue;
             
             $base_platform_name_for_key = ''; 
             $is_cost_column = false;
@@ -48,7 +44,6 @@ if (!function_exists('wp_trello_get_marketing_data_with_leads_costs_v19')) {
                 $base_platform_name_for_key = $header_name_csv; 
             }
 
-            // Normalizza il nome base della piattaforma per usarlo come chiave interna
             $internal_platform_key = wp_trello_normalize_platform_name($base_platform_name_for_key);
 
             if (!empty($internal_platform_key)) {
@@ -101,7 +96,7 @@ if (!function_exists('wp_trello_get_marketing_data_with_leads_costs_v19')) {
 
 
 if (!function_exists('wp_trello_display_summary_performance_table')) {
-    function wp_trello_display_summary_performance_table($filtered_trello_cards, $marketing_data_from_csv, $board_provenance_ids_map, $provenance_to_internal_platform_map, $lead_source = 'trello') {
+    function wp_trello_display_summary_performance_table($filtered_trello_cards, $marketing_data_from_csv, $board_provenance_ids_map, $provenance_to_internal_platform_map) {
         $summary_data = []; $nd_provenance_trello = 'N/D (Non specificata)';
         $date_from_ui_str=isset($_GET['date_from'])?sanitize_text_field($_GET['date_from']):null;
         $date_to_ui_str=isset($_GET['date_to'])?sanitize_text_field($_GET['date_to']):null;
@@ -113,13 +108,11 @@ if (!function_exists('wp_trello_display_summary_performance_table')) {
         }
         if(!isset($summary_data[$nd_provenance_trello])) $summary_data[$nd_provenance_trello] = ['leads' => 0, 'cost' => 0, 'cpl' => 0];
 
-        if ($lead_source === 'trello') {
-            foreach ($filtered_trello_cards as $card) {
-                $norm_prov = wp_trello_get_card_provenance($card, $board_provenance_ids_map);
-                $prov_key = ($norm_prov !== null) ? $norm_prov : $nd_provenance_trello;
-                if (!isset($summary_data[$prov_key])) $summary_data[$prov_key] = ['leads' => 0, 'cost' => 0, 'cpl' => 0];
-                $summary_data[$prov_key]['leads']++;
-            }
+        foreach ($filtered_trello_cards as $card) {
+            $norm_prov = wp_trello_get_card_provenance($card, $board_provenance_ids_map);
+            $prov_key = ($norm_prov !== null) ? $norm_prov : $nd_provenance_trello;
+            if (!isset($summary_data[$prov_key])) $summary_data[$prov_key] = ['leads' => 0, 'cost' => 0, 'cpl' => 0];
+            $summary_data[$prov_key]['leads']++;
         }
 
         if (!empty($marketing_data_from_csv)) {
@@ -132,12 +125,8 @@ if (!function_exists('wp_trello_display_summary_performance_table')) {
                 if ($include_week) {
                     foreach ($provenance_to_internal_platform_map as $trello_prov => $internal_platform_name) {
                         if (!isset($summary_data[$trello_prov])) $summary_data[$trello_prov] = ['leads' => 0, 'cost' => 0, 'cpl' => 0];
-                        
                         if (isset($week_data['costs'][$internal_platform_name])) { 
                             $summary_data[$trello_prov]['cost'] += $week_data['costs'][$internal_platform_name];
-                        }
-                        if ($lead_source === 'csv' && isset($week_data['leads_csv'][$internal_platform_name])) {
-                            $summary_data[$trello_prov]['leads'] += $week_data['leads_csv'][$internal_platform_name];
                         }
                     }
                 }
@@ -146,7 +135,6 @@ if (!function_exists('wp_trello_display_summary_performance_table')) {
         
         $table_rows = []; $grand_total_leads = 0; $grand_total_cost = 0.0;
         $all_display_provenances = array_keys($provenance_to_internal_platform_map);
-        // Aggiungi N/D solo se ha lead (i costi per N/D non vengono dal CSV)
         if(isset($summary_data[$nd_provenance_trello]) && $summary_data[$nd_provenance_trello]['leads'] > 0 ) {
             if(!in_array($nd_provenance_trello, $all_display_provenances)) $all_display_provenances[] = $nd_provenance_trello;
         }
@@ -154,7 +142,6 @@ if (!function_exists('wp_trello_display_summary_performance_table')) {
         foreach ($all_display_provenances as $prov_key) {
             $leads = $summary_data[$prov_key]['leads'] ?? 0; 
             $cost = $summary_data[$prov_key]['cost'] ?? 0.0;
-            // Mostra la riga solo se ci sono lead o costi, o se la provenienza è N/D e ha lead (per il caso Trello)
             if ($leads > 0 || $cost > 0 || ($prov_key === $nd_provenance_trello && ($summary_data[$prov_key]['leads'] ?? 0) > 0) ) {
                 $table_rows[$prov_key] = ['provenance' => $prov_key, 'leads' => $leads, 'cost' => $cost, 'cpl' => ($leads > 0 ? ($cost / $leads) : 0.0)];
                 $grand_total_leads += $leads; 
@@ -163,12 +150,11 @@ if (!function_exists('wp_trello_display_summary_performance_table')) {
         }
         ksort($table_rows);
         if (empty($table_rows) && $grand_total_leads == 0 && $grand_total_cost == 0) { 
-            echo '<p>Nessun dato riepilogativo da mostrare per i filtri e la fonte lead selezionata.</p>'; return; 
+            echo '<p>Nessun dato riepilogativo da mostrare per i filtri selezionati.</p>'; return; 
         }
 
-        $lead_source_label = ($lead_source === 'csv') ? 'Lead (CSV)' : 'Lead (Trello)';
         echo '<div class="uk-card uk-card-default uk-card-body uk-margin-bottom"><h3 class="uk-card-title">Riepilogo Performance Piattaforme</h3><div class="uk-overflow-auto">';
-        echo '<table class="uk-table uk-table-small uk-table-striped uk-table-hover"><thead><tr><th>Piattaforma (Provenienza Trello)</th><th class="uk-text-right">'.esc_html($lead_source_label).'</th><th class="uk-text-right">Spesa (€)</th><th class="uk-text-right">Costo Lead (€)</th></tr></thead><tbody>';
+        echo '<table class="uk-table uk-table-small uk-table-striped uk-table-hover"><thead><tr><th>Piattaforma</th><th class="uk-text-right">Lead</th><th class="uk-text-right">Spesa (€)</th><th class="uk-text-right">Costo Lead (€)</th></tr></thead><tbody>';
         foreach ($table_rows as $row) {
             echo '<tr><td>'.esc_html($row['provenance']).'</td><td class="uk-text-right">'.esc_html($row['leads']).'</td><td class="uk-text-right">'.esc_html(number_format($row['cost'],2,',','.')).'</td><td class="uk-text-right">'.esc_html(number_format($row['cpl'],2,',','.')).'</td></tr>';
         }
@@ -176,11 +162,12 @@ if (!function_exists('wp_trello_display_summary_performance_table')) {
     }
 }
 
-function wp_trello_display_combined_performance_charts($filtered_trello_cards, $marketing_data_from_csv, $board_provenance_ids_map, $lead_source = 'trello') {
+
+function wp_trello_display_combined_performance_charts($filtered_trello_cards, $marketing_data_from_csv, $board_provenance_ids_map) {
     $provenance_to_internal_platform_map = [
         'iol'                => 'italiaonline',
         'chiamate'           => 'chiamate',
-        'Organic Search'     => 'organico', // Ora corrisponde alla chiave normalizzata 'organico'
+        'Organic Search'     => 'organico',
         'taormina'           => 'taormina',
         'fb'                 => 'facebook',
         'Google Ads'         => 'google ads',
@@ -191,7 +178,7 @@ function wp_trello_display_combined_performance_charts($filtered_trello_cards, $
         'Europage'           => 'europage',
     ];
 
-    wp_trello_display_summary_performance_table($filtered_trello_cards, $marketing_data_from_csv, $board_provenance_ids_map, $provenance_to_internal_platform_map, $lead_source);
+    wp_trello_display_summary_performance_table($filtered_trello_cards, $marketing_data_from_csv, $board_provenance_ids_map, $provenance_to_internal_platform_map);
     echo '<h4 class="uk-heading-line uk-text-center uk-margin-medium-top"><span>Andamento Settimanale per Piattaforma</span></h4>';
 
     $start_date_obj_fixed = new DateTime('2024-12-30'); $start_date_obj_fixed->modify('monday this week');
@@ -217,57 +204,51 @@ function wp_trello_display_combined_performance_charts($filtered_trello_cards, $
     if(empty($chart_x_axis_iso_weeks)){echo "<p>Impossibile determinare l'intervallo di settimane per i grafici con i filtri attuali.</p>";return;}
 
     $leads_data_for_charts = [];
-    if ($lead_source === 'trello') {
-        foreach ($filtered_trello_cards as $card) {
-            if(empty($card['id'])) continue; 
-            // MODIFICATO: utilizzo della funzione helper stsg_get_card_creation_date
-            $card_date_obj = stsg_get_card_creation_date($card['id']);
-            if(!$card_date_obj) continue;
-            
-            $iso_week_key = $card_date_obj->format("o-\WW"); 
-            $norm_prov=wp_trello_get_card_provenance($card,$board_provenance_ids_map); // Usa funzione da helpers
-            if($norm_prov===null)$norm_prov='N/D (Non specificata)';
-            if(!isset($leads_data_for_charts[$iso_week_key])) $leads_data_for_charts[$iso_week_key] = [];
-            if(!isset($leads_data_for_charts[$iso_week_key][$norm_prov])) $leads_data_for_charts[$iso_week_key][$norm_prov] = 0;
-            $leads_data_for_charts[$iso_week_key][$norm_prov]++;
-        }
-    } elseif ($lead_source === 'csv' && !empty($marketing_data_from_csv)) {
-        foreach($marketing_data_from_csv as $iso_week_key => $week_data){
-            if(!in_array($iso_week_key, $chart_x_axis_iso_weeks)) continue;
-            foreach($provenance_to_internal_platform_map as $trello_prov => $internal_platform_name){
-                $leads_count_csv = $week_data['leads_csv'][$internal_platform_name] ?? 0;
-                if($leads_count_csv > 0 || array_key_exists($internal_platform_name, $week_data['leads_csv'])){ // Considera anche se 0 ma la piattaforma esiste
-                    if(!isset($leads_data_for_charts[$iso_week_key])) $leads_data_for_charts[$iso_week_key] = [];
-                    if(!isset($leads_data_for_charts[$iso_week_key][$trello_prov])) $leads_data_for_charts[$iso_week_key][$trello_prov] = 0;
-                    $leads_data_for_charts[$iso_week_key][$trello_prov] += $leads_count_csv;
-                }
-            }
-        }
+    foreach ($filtered_trello_cards as $card) {
+        if(empty($card['id'])) continue; 
+        $card_date_obj = stsg_get_card_creation_date($card['id']);
+        if(!$card_date_obj) continue;
+        
+        $iso_week_key = $card_date_obj->format("o-\WW"); 
+        $norm_prov=wp_trello_get_card_provenance($card,$board_provenance_ids_map);
+        if($norm_prov===null)$norm_prov='N/D (Non specificata)';
+        if(!isset($leads_data_for_charts[$iso_week_key])) $leads_data_for_charts[$iso_week_key] = [];
+        if(!isset($leads_data_for_charts[$iso_week_key][$norm_prov])) $leads_data_for_charts[$iso_week_key][$norm_prov] = 0;
+        $leads_data_for_charts[$iso_week_key][$norm_prov]++;
     }
     
-    $chart_id_counter=0; echo '<div class="uk-grid uk-child-width-1-1" uk-grid>'; 
+    $chart_id_counter=0; echo '<div class="row row-cols-1 g-4">'; 
     $active_provenance_filters = isset($_GET['provenances'])?(array)$_GET['provenances']:[]; $charts_generated=0;
+
+    echo '<div class="uk-grid uk-child-width-1-1" uk-grid>'; 
 
     foreach ($provenance_to_internal_platform_map as $trello_prov_normalizzata => $internal_platform_name) {
         if (!empty($active_provenance_filters) && !in_array($trello_prov_normalizzata, $active_provenance_filters)) continue;
+        
         $leads_dataset=[]; $csv_costs_dataset=[]; $has_data_for_this_chart=false;
         foreach ($chart_x_axis_iso_weeks as $iso_week_key) {
             $leads_count = $leads_data_for_charts[$iso_week_key][$trello_prov_normalizzata] ?? 0;
             $leads_dataset[] = $leads_count;
             
-            // --- MODIFICATO: Ripristinato il recupero dei costi da CSV ---
             $cost_value = isset($marketing_data_from_csv[$iso_week_key]['costs'][$internal_platform_name]) ? $marketing_data_from_csv[$iso_week_key]['costs'][$internal_platform_name] : 0;
-            
             $csv_costs_dataset[]=$cost_value;
+            
             if($leads_count>0||$cost_value>0) $has_data_for_this_chart=true;
         }
+
+        // --- BLOCCO LOGICO CORRETTO ---
         if(!$has_data_for_this_chart && !empty($active_provenance_filters) && in_array($trello_prov_normalizzata, $active_provenance_filters)){
-            echo '<div><div class="uk-card uk-card-default uk-card-body uk-margin-small-bottom"><h4 class="uk-card-title">Performance: '.esc_html($trello_prov_normalizzata).'</h4><p>Nessun dato per questa provenienza con i filtri attuali.</p></div></div>';
+            echo '<div class="col"><div class="card h-100"><div class="card-body"><h5 class="card-title">Performance: '.esc_html($trello_prov_normalizzata).'</h5><p>Nessun dato per questa provenienza con i filtri attuali.</p></div></div></div>';
             continue;
-        } elseif(!$has_data_for_this_chart) continue;
+        }
+        
+        if(!$has_data_for_this_chart) {
+            continue;
+        }
+        // --- FINE BLOCCO LOGICO CORRETTO ---
 
         $charts_generated++; $canvas_id='combinedChart_'.sanitize_key($trello_prov_normalizzata).'_'.(++$chart_id_counter);
-        $lead_dataset_label = ($lead_source === 'csv') ? 'Lead (CSV)' : 'Lead (Trello)';
+        $lead_dataset_label = 'Lead (Trello)';
         ?>
         <div><div class="uk-card uk-card-default uk-card-body uk-margin-small-bottom">
         <h4 class="uk-card-title">Performance: <?php echo esc_html($trello_prov_normalizzata); ?></h4>
@@ -280,8 +261,10 @@ function wp_trello_display_combined_performance_charts($filtered_trello_cards, $
                     new Chart(ctx_<?php echo esc_js($canvas_id); ?>,{type:'line',data:{
                     labels:<?php echo json_encode($chart_x_axis_labels); ?>,
                     datasets:[
-                        {label:'<?php echo esc_js($lead_dataset_label); ?>',data:<?php echo json_encode($leads_dataset); ?>,borderColor:'rgb(75,192,192)',backgroundColor:'rgba(75,192,192,0.2)',yAxisID:'yRequests',tension:0.1,fill:true},
-                        {label:'Costo (€ - CSV)',data:<?php echo json_encode($csv_costs_dataset); ?>,borderColor:'rgb(255,99,132)',backgroundColor:'rgba(255,99,132,0.2)',yAxisID:'yCosts',tension:0.1,fill:true}
+                        /* --- MODIFICA COLORI GRAFICO --- */
+                        {label:'<?php echo esc_js($lead_dataset_label); ?>',data:<?php echo json_encode($leads_dataset); ?>,borderColor:'#9C2020',backgroundColor:'rgba(156, 32, 32, 0.2)',yAxisID:'yRequests',tension:0.1,fill:true},
+                        {label:'Costo (€ - CSV)',data:<?php echo json_encode($csv_costs_dataset); ?>,borderColor:'#222222',backgroundColor:'rgba(34, 34, 34, 0.2)',yAxisID:'yCosts',tension:0.1,fill:true}
+                        /* --- FINE MODIFICA --- */
                     ]},
                     options:{responsive:true,maintainAspectRatio:false,scales:{yRequests:{type:'linear',display:true,position:'left',beginAtZero:true,title:{display:true,text:'N. Lead'}},yCosts:{type:'linear',display:true,position:'right',beginAtZero:true,title:{display:true,text:'Costo (€)'},grid:{drawOnChartArea:false}}},plugins:{legend:{display:true,position:'top'}}}});
                 }

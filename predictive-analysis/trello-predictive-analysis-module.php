@@ -75,34 +75,52 @@ function stpa_ajax_start_background_analysis() {
     $cards_cache_table = STPA_CARDS_CACHE_TABLE;
     $queue_table = STPA_QUEUE_TABLE;
 
-    $max_cards_from_frontend = isset($_POST['max_cards_for_analysis']) ? intval($_POST['max_cards_for_analysis']) : 1000;
+    $max_cards_from_frontend = isset($_POST['max_cards_for_analysis']) ? intval($_POST['max_cards_for_analysis']) : 0; // Default a 0 (tutte)
 
     $allowed_board_ids = STPA_ALLOWED_ANALYSIS_BOARDS;
     if (empty($allowed_board_ids)) {
-        wp_send_json_error('Nessuna board consentita per l\'analisi.');
+        wp_send_json_error('Nessuna board consentita per l\'analisi (costante STPA_ALLOWED_ANALYSIS_BOARDS è vuota).');
         return;
     }
 
+    // --- INIZIO BLOCCO CORRETTO PER LA QUERY ---
+    $query_vars = $allowed_board_ids; // Inizia con gli ID delle bacheche
     $board_ids_placeholder = implode(', ', array_fill(0, count($allowed_board_ids), '%s'));
-    $query = $wpdb->prepare(
-        "SELECT card_id FROM $cards_cache_table WHERE is_numeric_name = TRUE AND board_id IN ($board_ids_placeholder) ORDER BY date_last_activity DESC LIMIT %d",
-        array_merge($allowed_board_ids, [$max_cards_from_frontend])
-    );
+    
+    $query_sql = "SELECT card_id FROM $cards_cache_table WHERE is_numeric_name = 1 AND is_archived = 0 AND in_archived_list = 0 AND board_id IN ($board_ids_placeholder)";
+
+    if ($max_cards_from_frontend > 0) {
+        $query_sql .= " LIMIT %d";
+        $query_vars[] = $max_cards_from_frontend; // Aggiungi il limite all'array di variabili
+    }
+
+    // Esegui la query con il metodo corretto
+    $query = $wpdb->prepare($query_sql, $query_vars);
     $pre_selected_card_ids = $wpdb->get_col($query);
+    // --- FINE BLOCCO CORRETTO PER LA QUERY ---
 
     if (empty($pre_selected_card_ids)) {
-        wp_send_json_error('Nessuna scheda valida trovata per l\'analisi.');
+        // Aggiungiamo un log di debug per capire perché fallisce, se dovesse succedere di nuovo
+        error_log('[Trello Analysis] DEBUG: La query non ha restituito schede. SQL Eseguito (approssimato): ' . $query);
+        wp_send_json_error('Errore: Nessuna scheda valida trovata per l\'analisi dopo la correzione. Controlla il debug log.');
         return;
     }
 
-    $benchmark_cards = stpa_get_cards_from_list(STPA_BENCHMARK_LIST_ID);
+    // Il resto della funzione per avviare il processo rimane invariato...
+    $benchmark_cards = stpa_get_cards_from_list(STPA_BENCHMARK_LIST_ID); 
     $benchmark_text = '';
-    if (!is_wp_error($benchmark_cards) && !empty($benchmark_cards)) {
+    
+    if (!is_wp_error($benchmark_cards) && !empty($benchmark_cards) && function_exists('stpa_get_card_comments_cached') && function_exists('stpa_filter_irrelevant_comments')) {
         foreach ($benchmark_cards as $card) {
-            if (!empty($card['desc'])) {
-                $benchmark_text .= $card['desc'] . "\n\n---\n\n";
+            $comments_result = stpa_get_card_comments_cached($card['id']);
+            if (!$comments_result['error'] && !empty($comments_result['comments'])) {
+                $filtered_comments = stpa_filter_irrelevant_comments($comments_result['comments']);
+                foreach ($filtered_comments as $comment) {
+                    $benchmark_text .= $comment['text'] . "\n\n";
+                }
             }
         }
+        $benchmark_text = trim($benchmark_text); 
     }
 
     $analysis_id = 'analysis_' . time();
@@ -112,9 +130,7 @@ function stpa_ajax_start_background_analysis() {
     $place_holders = [];
     $insert_query = "INSERT INTO $queue_table (analysis_id, card_id, status) VALUES ";
     foreach ($pre_selected_card_ids as $card_id) {
-        $values[] = $analysis_id;
-        $values[] = $card_id;
-        $values[] = 'pending';
+        array_push($values, $analysis_id, $card_id, 'pending');
         $place_holders[] = "(%s, %s, %s)";
     }
     $insert_query .= implode(', ', $place_holders);
@@ -133,7 +149,6 @@ function stpa_ajax_start_background_analysis() {
     ];
 
     update_option(STPA_QUEUE_OPTION, $queue_meta);
-
     wp_schedule_event(time(), 'stpa_one_minute', STPA_CRON_EVENT);
 
     wp_send_json_success([
@@ -142,6 +157,7 @@ function stpa_ajax_start_background_analysis() {
         'total_cards' => $total_cards_to_process,
     ]);
 }
+
 
 function stpa_ajax_get_background_status() {
     global $wpdb;
@@ -165,7 +181,7 @@ function stpa_ajax_get_background_status() {
     $queue_meta['processed_cards'] = $processed_cards;
 
     // **BUGFIX**: Recalculate chunk info and add to the response for the UI.
-    $batch_size = 100;
+    $batch_size = 5;
     $queue_meta['total_chunks'] = !empty($queue_meta['total_cards']) ? ceil($queue_meta['total_cards'] / $batch_size) : 0;
     $queue_meta['processed_chunks'] = !empty($processed_cards) ? floor($processed_cards / $batch_size) : 0;
 
@@ -346,12 +362,11 @@ function stpa_get_card_comments_cached($card_id) {
             $actions = json_decode(wp_remote_retrieve_body($response), true);
             $current_comments = [];
             if (is_array($actions)) {
-                $count = 0;
+                // --- MODIFICA QUI ---
+                // Il limite è stato rimosso per recuperare tutti i commenti disponibili.
                 foreach ($actions as $action) {
-                    if ($count >= 5) break;
                     if (isset($action['data']['text'])) {
                         $current_comments[] = ['date' => $action['date'], 'text' => $action['data']['text']];
-                        $count++;
                     }
                 }
             }

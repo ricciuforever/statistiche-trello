@@ -1,3 +1,80 @@
-<style>
+/* --- TEMA PERSONALIZZATO BASATO SUI COLORI AZIENDALI --- */
 
-</style>
+/* --- Definizione Variabili Colore --- */
+:root {
+    --brand-primary: #9C2020; /* Rosso Scuro/Bordeaux */
+    --brand-primary-hover: #B82828; /* Rosso più brillante per hover */
+    --brand-dark: #222222; /* Grigio scuro/Quasi nero */
+    --brand-light-gray: #f8f8f8; /* Grigio chiaro per sfondi */
+    --brand-text: #333333; /* Colore testo standard */
+}
+
+/* --- Elementi Generali (Titoli e Link) --- */
+h1, h2, h3, h4, h5, h6, .uk-card-title, .uk-legend {
+    color: var(--brand-dark);
+    font-weight: 600;
+}
+
+a, a:visited {
+    color: var(--brand-primary);
+    text-decoration: none;
+}
+
+a:hover {
+    color: var(--brand-primary-hover);
+    text-decoration: underline;
+}
+
+/* --- Bottoni --- */
+.uk-button-primary {
+    background-color: var(--brand-primary);
+    border-color: var(--brand-primary);
+    color: #ffffff;
+}
+.uk-button-primary:hover,
+.uk-button-primary:focus {
+    background-color: var(--brand-primary-hover);
+    border-color: var(--brand-primary-hover);
+    color: #ffffff;
+}
+
+/* --- Filtri --- */
+.uk-checkbox:checked,
+.uk-radio:checked {
+    background-color: var(--brand-primary);
+    border-color: transparent;
+}
+.uk-select:focus,
+.uk-input:focus {
+    border-color: var(--brand-primary);
+}
+
+/* --- Tabelle --- */
+.uk-table thead {
+    background-color: var(--brand-light-gray);
+}
+.uk-table thead th {
+    color: var(--brand-dark);
+    font-weight: 600;
+}
+.uk-table tfoot tr {
+    font-weight: bold;
+    color: var(--brand-dark);
+    background-color: rgba(0,0,0,0.02); /* Sfondo leggermente diverso per il totale */
+}
+
+/* --- Card e Divisori --- */
+.uk-card-default {
+    border: 1px solid #e5e5e5;
+}
+.uk-divider-icon::before,
+.uk-divider-icon::after {
+    border-color: #e5e5e5;
+}
+
+/* --- Avviso Cache --- */
+.uk-alert-primary {
+    background-color: #f5f5f5;
+    color: var(--brand-dark);
+    border-left: 5px solid var(--brand-primary);
+}

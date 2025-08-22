@@ -159,23 +159,52 @@ if (!function_exists('get_trello_boards')) {
 
 if (!function_exists('get_trello_cards')) { 
     function get_trello_cards($boardId, $apiKey, $apiToken) {
-        $transient_key = 'wp_trello_cards_all_v2_' . $boardId;
+        $transient_key = 'wp_trello_cards_all_v3_' . $boardId; // Versione transient incrementata
         $cached_cards = get_transient($transient_key);
-        if (false !== $cached_cards) return $cached_cards;
+        if (false !== $cached_cards) {
+            return $cached_cards;
+        }
         
+        $all_cards = [];
+        $before = null; // Per la paginazione, partiamo dalla fine
         $fields = "id,name,desc,closed,idBoard,idList,labels,customFieldItems,dateLastActivity";
-        $url = "https://api.trello.com/1/boards/{$boardId}/cards?customFieldItems=true&cards=all&fields={$fields}&key={$apiKey}&token={$apiToken}";
+        $limit = 1000; // Limite massimo per richiesta API Trello
+
+        while (true) {
+            $url = "https://api.trello.com/1/boards/{$boardId}/cards?customFieldItems=true&fields={$fields}&limit={$limit}&key={$apiKey}&token={$apiToken}";
+            if ($before) {
+                $url .= "&before=" . $before;
+            }
+
+            $response = wp_remote_get($url, ['timeout' => 30]); // Timeout aumentato per richieste pesanti
+
+            if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
+                error_log("Errore API Trello (get_trello_cards per board $boardId): " . print_r($response, true));
+                // In caso di errore, restituiamo quello che abbiamo trovato finora per non perdere tutto
+                break;
+            }
+
+            $cards_batch = json_decode(wp_remote_retrieve_body($response), true);
+
+            if (!is_array($cards_batch) || empty($cards_batch)) {
+                // Se non ci sono più schede, abbiamo finito
+                break;
+            }
+
+            $all_cards = array_merge($all_cards, $cards_batch);
+            
+            // Imposta il marcatore 'before' all'ID della prima (più vecchia) scheda di questo batch
+            // per la richiesta successiva.
+            $before = end($cards_batch)['id'];
+
+            // Se il batch restituito ha meno di 1000 schede, significa che abbiamo raggiunto l'inizio
+            if (count($cards_batch) < $limit) {
+                break;
+            }
+        }
         
-        $response = wp_remote_get($url, ['timeout' => 20]);
-        if (is_wp_error($response)) return [];
-        
-        $status_code = wp_remote_retrieve_response_code($response);
-        if ($status_code !== 200) { error_log("Errore API Trello (get_trello_cards per board $boardId): Codice $status_code"); return []; }
-        $cards = json_decode(wp_remote_retrieve_body($response), true);
-        if (!is_array($cards)) return [];
-        
-        set_transient($transient_key, $cards, 15 * MINUTE_IN_SECONDS);
-        return $cards;
+        set_transient($transient_key, $all_cards, 15 * MINUTE_IN_SECONDS);
+        return $all_cards;
     }
 }
 
@@ -210,4 +239,26 @@ if (!function_exists('wp_trello_apply_filters_to_cards')) {
         if((!empty($df)||!empty($dt))&&function_exists('filter_cards_by_date_range')){$cc=filter_cards_by_date_range($cc,$df,$dt);}
         return $cc;
     } 
+}
+
+if (!function_exists('wp_trello_get_all_lists_for_board')) {
+    function wp_trello_get_all_lists_for_board($boardId, $apiKey, $apiToken) {
+        $transient_key = 'wp_trello_all_lists_v1_' . $boardId;
+        $cached_lists = get_transient($transient_key);
+        if (false !== $cached_lists) {
+            return $cached_lists;
+        }
+
+        $url = "https://api.trello.com/1/boards/{$boardId}/lists?filter=all&fields=id,closed&key={$apiKey}&token={$apiToken}";
+        $response = wp_remote_get($url, ['timeout' => 20]);
+
+        if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
+            error_log("Errore API Trello (wp_trello_get_all_lists_for_board per board $boardId): " . print_r($response, true));
+            return [];
+        }
+
+        $lists = json_decode(wp_remote_retrieve_body($response), true);
+        set_transient($transient_key, $lists, 15 * MINUTE_IN_SECONDS);
+        return $lists;
+    }
 }
