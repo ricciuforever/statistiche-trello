@@ -518,39 +518,104 @@ function wtqsg_monthly_quotes_sheet_generation_cron_job() {
 
 
 /**
- * Esegue l'aggiornamento orario delle colonne "snapshot" nel foglio preventivi del mese corrente.
+ * Esegue l'aggiornamento ORARIO COMPLETO della riga del giorno corrente nel foglio preventivi.
+ * Questa funzione ora aggiorna tutte le colonne per il giorno corrente, non solo quelle snapshot.
  */
 function wtqsg_daily_quotes_sheet_snapshot_update_cron_job() {
-    error_log('WTQSG Cron (Hourly Snapshot): Avvio aggiornamento orario snapshot.');
+    error_log('WTQSG Cron (Hourly Full-Day Update): Avvio aggiornamento orario completo per la riga di oggi.');
 
     $stsg_client = new STSG_Google_Sheets_Client();
     $sheets_service = $stsg_client->getService();
 
     if (is_wp_error($sheets_service)) {
-        error_log('WTQSG Cron Error (Hourly Snapshot): Connessione a Google Sheets fallita: ' . $sheets_service->get_error_message());
+        error_log('WTQSG Cron Error (Hourly Full-Day Update): Connessione a Google Sheets fallita: ' . $sheets_service->get_error_message());
         return;
     }
 
     try {
-        $date_to_update = new DateTime();
+        // --- 1. Imposta le variabili di data e nome foglio ---
+        $date_to_update = new DateTime('now', new DateTimeZone('Europe/Rome'));
         $year = (int)$date_to_update->format('Y');
         $month = (int)$date_to_update->format('m');
         $day = (int)$date_to_update->format('d');
         $month_name_it = stsg_translate_month_to_italian($date_to_update->format('F'));
         $sheet_name_with_month = WTQSG_BASE_SHEET_NAME . '-' . ucfirst($month_name_it) . '-' . $year;
         $day_label_for_sheet = stsg_translate_month_to_italian($date_to_update->format('d F'));
-        
-        // Calcola i dati "snapshot" aggiornati per oggi
+
+        // --- 2. Recupera tutti i dati necessari per la riga di oggi ---
         $trello_api_key = defined('TRELLO_API_KEY') ? TRELLO_API_KEY : null;
         $trello_api_token = defined('TRELLO_API_TOKEN') ? TRELLO_API_TOKEN : null;
+
+        // Dati da Fatture in Cloud per oggi
+        $quotes_today = wtqsg_get_quotes_from_fic($year, $month, $day);
+        if (is_wp_error($quotes_today)) {
+             error_log('WTQSG Cron Error (Hourly Full-Day Update): Fallito recupero preventivi da FIC per oggi: ' . $quotes_today->get_error_message());
+             $quotes_today = []; // Continua anche se FIC fallisce
+        }
+
+        // Conteggio "Richieste Ricevute" da Trello per oggi
+        $richieste_ricevute_today = 0;
+        global $wpdb;
+        $cards_cache_table = STPA_CARDS_CACHE_TABLE;
+        $all_numeric_cards = $wpdb->get_results( $wpdb->prepare("SELECT card_id FROM {$cards_cache_table} WHERE is_numeric_name = %d", 1), ARRAY_A);
+        if (!empty($all_numeric_cards)) {
+            $today_date_str = $date_to_update->format('Y-m-d');
+            foreach($all_numeric_cards as $card) {
+                $creation_date = stsg_get_card_creation_date($card['card_id']);
+                if ($creation_date && $creation_date->format('Y-m-d') === $today_date_str) {
+                    $richieste_ricevute_today++;
+                }
+            }
+        }
+
+        // Dati "snapshot"
         $requests_to_clarify_current = wtqsg_get_total_open_cards_from_multiple_lists([ [TRELLO_BOARD_ID_GESTIONALE, TRELLO_LIST_ID_RICHIESTE_CHIARIRE_2] ], $trello_api_key, $trello_api_token) + wtqsg_get_total_open_cards_from_multiple_lists([ [TRELLO_BOARD_ID_AGENTE_ANTONIO, TRELLO_LIST_ID_AGENTE_ANTONIO_CHIARIRE], [TRELLO_BOARD_ID_AGENTE_GALLI, TRELLO_LIST_ID_AGENTE_GALLI_CHIARIRE], [TRELLO_BOARD_ID_AGENTE_ISABELLA, TRELLO_LIST_ID_AGENTE_ISABELLA_CHIARIRE], [TRELLO_BOARD_ID_AGENTE_JALALL, TRELLO_LIST_ID_AGENTE_JALALL_CHIARIRE], [TRELLO_BOARD_ID_AGENTE_MARCO, TRELLO_LIST_ID_AGENTE_MARCO_CHIARIRE], [TRELLO_BOARD_ID_AGENTE_NOEMI, TRELLO_LIST_ID_AGENTE_NOEMI_CHIARIRE], [TRELLO_BOARD_ID_AGENTE_TONACCI, TRELLO_LIST_ID_AGENTE_TONACCI_CHIARIRE], ], $trello_api_key, $trello_api_token);
         $stalled_cards_current = wtqsg_get_total_open_cards_from_multiple_lists([ [TRELLO_BOARD_ID_GESTIONALE, TRELLO_LIST_ID_RICHIESTE_INCAGLIATE_1], [TRELLO_BOARD_ID_GESTIONALE, TRELLO_LIST_ID_RICHIESTE_INCAGLIATE_2] ], $trello_api_key, $trello_api_token);
         $effective_quotes_to_do_current = wtqsg_calculate_effective_quotes($trello_api_key, $trello_api_token);
-        
+
+        // --- 3. Costruisci l'intera riga per il giorno corrente ---
         $headers = wtqsg_get_quotes_sheet_headers();
-        $header_to_index_map = array_flip($headers);
+        $user_map = wtqsg_get_user_map();
+        $user_names = array_values($user_map);
+        $fic_quotes_by_user = array_fill_keys($user_names, 0);
+        $total_fic_quotes = 0;
+
+        if (!empty($quotes_today)) {
+            foreach ($quotes_today as $quote) {
+                $identifier_string = trim($quote['numeration'] ?? $quote['number'] ?? '');
+                if (empty($identifier_string)) continue;
+                $assigned_user_name = 'Automatico';
+                if (strtoupper(substr($identifier_string, 0, 2)) === 'AU') {
+                    $assigned_user_name = 'Automatico';
+                } elseif (preg_match('/^\d*([A-Z])/', $identifier_string, $matches_letter) && isset($matches_letter[1])) {
+                    $extracted_code = strtoupper($matches_letter[1]);
+                    $assigned_user_name = $user_map[$extracted_code] ?? 'Automatico';
+                }
+                $fic_quotes_by_user[$assigned_user_name]++;
+                $total_fic_quotes++;
+            }
+        }
         
-        // Trova la riga di oggi
+        $row_data = [];
+        foreach ($headers as $header_name) {
+            switch ($header_name) {
+                case 'Giorno': $row_data[] = $day_label_for_sheet; break;
+                case 'Totale Preventivi': $row_data[] = $total_fic_quotes; break;
+                case 'Richieste ricevute': $row_data[] = $richieste_ricevute_today; break;
+                case 'Richieste da Chiarire': $row_data[] = $requests_to_clarify_current; break;
+                case 'Schede incagliate': $row_data[] = $stalled_cards_current; break;
+                case 'Preventivi effettivi da fare': $row_data[] = $effective_quotes_to_do_current; break;
+                default:
+                    if (in_array($header_name, $user_names)) {
+                        $row_data[] = $fic_quotes_by_user[$header_name];
+                    } else {
+                        $row_data[] = ''; // Colonna sconosciuta, lascia vuota
+                    }
+                    break;
+            }
+        }
+
+        // --- 4. Trova la riga di oggi e aggiornala ---
         $day_column_range = $sheet_name_with_month . '!A:A';
         $day_column_response = $sheets_service->spreadsheets_values->get(WTQSG_SPREADSHEET_ID, $day_column_range);
         $day_column_values = $day_column_response->getValues() ?? [];
@@ -563,36 +628,19 @@ function wtqsg_daily_quotes_sheet_snapshot_update_cron_job() {
         }
         
         if ($row_index_to_update !== -1) {
-             $updates = [];
-             if (isset($header_to_index_map['Richieste da Chiarire'])) {
-                $col_letter = chr(ord('A') + $header_to_index_map['Richieste da Chiarire']);
-                $range = $sheet_name_with_month . '!' . $col_letter . ($row_index_to_update + 1);
-                $updates[] = ['range' => $range, 'values' => [[$requests_to_clarify_current]]];
-            }
-            if (isset($header_to_index_map['Schede incagliate'])) {
-                $col_letter = chr(ord('A') + $header_to_index_map['Schede incagliate']);
-                $range = $sheet_name_with_month . '!' . $col_letter . ($row_index_to_update + 1);
-                $updates[] = ['range' => $range, 'values' => [[$stalled_cards_current]]];
-            }
-            if (isset($header_to_index_map['Preventivi effettivi da fare'])) {
-                $col_letter = chr(ord('A') + $header_to_index_map['Preventivi effettivi da fare']);
-                $range = $sheet_name_with_month . '!' . $col_letter . ($row_index_to_update + 1);
-                $updates[] = ['range' => $range, 'values' => [[$effective_quotes_to_do_current]]];
-            }
-
-            if (!empty($updates)) {
-                $batch_update_request = new Google_Service_Sheets_BatchUpdateValuesRequest([
-                    'valueInputOption' => 'USER_ENTERED',
-                    'data' => $updates,
-                ]);
-                $sheets_service->spreadsheets_values->batchUpdate(WTQSG_SPREADSHEET_ID, $batch_update_request);
-            }
+            $row_number_in_sheet = $row_index_to_update + 1;
+            $update_range = $sheet_name_with_month . '!A' . $row_number_in_sheet;
+            $body = new Google_Service_Sheets_ValueRange(['values' => [$row_data]]);
+            $sheets_service->spreadsheets_values->update(WTQSG_SPREADSHEET_ID, $update_range, $body, ['valueInputOption' => 'USER_ENTERED']);
+            error_log("WTQSG Cron (Hourly Full-Day Update): Riga {$row_number_in_sheet} aggiornata con successo.");
+        } else {
+            error_log("WTQSG Cron Error (Hourly Full-Day Update): Impossibile trovare la riga per il giorno '{$day_label_for_sheet}' nel foglio '{$sheet_name_with_month}'.");
         }
 
     } catch (Exception $e) {
-        error_log('WTQSG Cron Error (Hourly Snapshot): Errore durante l\'aggiornamento orario dello snapshot: ' . $e->getMessage());
+        error_log('WTQSG Cron Error (Hourly Full-Day Update): Eccezione durante l\'aggiornamento orario: ' . $e->getMessage());
     }
-    error_log('WTQSG Cron (Hourly Snapshot): Aggiornamento orario snapshot terminato.');
+    error_log('WTQSG Cron (Hourly Full-Day Update): Aggiornamento orario completo terminato.');
 }
 
 

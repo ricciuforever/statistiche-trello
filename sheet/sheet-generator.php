@@ -21,6 +21,9 @@ define('STSG_SHEET_NAME', 'Richieste'); // Es. 'Foglio1'
 // NOME DELL'ETICHETTA DI TRELLO CHE INDICA UN PREVENTIVO FATTO
 define('STSG_LABEL_PREVENTIVO', 'Preventivo Inviato');
 
+// NOME DEL CRON JOB PER L'AGGIORNAMENTO GIORNALIERO DELLA SETTIMANA
+define('STSG_CRON_EVENT_DAILY_WEEK_UPDATE', 'stsg_daily_week_update_event');
+
 
 /**
  * Restituisce l'elenco fisso delle intestazioni dello sheet.
@@ -414,6 +417,84 @@ function stsg_update_single_week($sheets_service, $week_range_key) {
     } catch (Exception $e) {
         return new WP_Error('google_api_error', $e->getMessage());
     }
+}
+
+
+// --- GESTIONE CRON JOB ---
+
+add_action('wp_loaded', 'stsg_schedule_daily_cron_event');
+
+/**
+ * Schedula il cron job giornaliero per aggiornare la settimana corrente nel foglio "Richieste".
+ */
+function stsg_schedule_daily_cron_event() {
+    // Aggiungi l'intervallo 'daily' se non esiste (buona pratica)
+    add_filter('cron_schedules', function($schedules) {
+        if (!isset($schedules['daily'])) {
+            $schedules['daily'] = [
+                'interval' => DAY_IN_SECONDS,
+                'display'  => esc_html__('Once Daily'),
+            ];
+        }
+        return $schedules;
+    });
+
+    if (!wp_next_scheduled(STSG_CRON_EVENT_DAILY_WEEK_UPDATE)) {
+        // Schedula l'evento per le 2 del mattino per evitare ore di punta.
+        wp_schedule_event(strtotime('tomorrow 2:00:00'), 'daily', STSG_CRON_EVENT_DAILY_WEEK_UPDATE);
+    }
+}
+
+add_action(STSG_CRON_EVENT_DAILY_WEEK_UPDATE, 'stsg_daily_week_update_cron_job');
+
+/**
+ * Funzione eseguita dal cron job giornaliero.
+ * Identifica la settimana corrente e ne aggiorna i dati sul foglio "Richieste".
+ */
+function stsg_daily_week_update_cron_job() {
+    error_log('STSG Cron (Daily Week Update): Avvio aggiornamento giornaliero della settimana corrente.');
+
+    $stsg_client = new STSG_Google_Sheets_Client();
+    $sheets_service = $stsg_client->getService();
+
+    if (is_wp_error($sheets_service)) {
+        error_log('STSG Cron Error (Daily Week Update): Connessione a Google Sheets fallita: ' . $sheets_service->get_error_message());
+        return;
+    }
+
+    // Trova la chiave della settimana corrente
+    $current_week_key = '';
+    $today = new DateTime('now', new DateTimeZone('Europe/Rome'));
+    $week_ranges = stsg_get_week_ranges();
+
+    foreach ($week_ranges as $range_key => $range_text) {
+        $date_parts = explode('_', $range_key);
+        $start_date = new DateTime($date_parts[0], new DateTimeZone('Europe/Rome'));
+        $end_date   = (new DateTime($date_parts[1], new DateTimeZone('Europe/Rome')))->setTime(23, 59, 59);
+
+        if ($today >= $start_date && $today <= $end_date) {
+            $current_week_key = $range_key;
+            break;
+        }
+    }
+
+    if (empty($current_week_key)) {
+        error_log('STSG Cron Error (Daily Week Update): Impossibile determinare la settimana corrente. Interruzione.');
+        return;
+    }
+
+    error_log("STSG Cron (Daily Week Update): Settimana corrente identificata: {$current_week_key}. Avvio aggiornamento.");
+
+    $result = stsg_update_single_week($sheets_service, $current_week_key);
+
+    if (is_wp_error($result)) {
+        error_log('STSG Cron Error (Daily Week Update): Errore durante l\'aggiornamento della settimana: ' . $result->get_error_message());
+    } else {
+        $action_taken = isset($result['action']) ? $result['action'] : 'sconosciuta';
+        error_log("STSG Cron (Daily Week Update): Aggiornamento settimana completato. Azione: {$action_taken}.");
+    }
+
+    error_log('STSG Cron (Daily Week Update): Aggiornamento giornaliero terminato.');
 }
 
 
