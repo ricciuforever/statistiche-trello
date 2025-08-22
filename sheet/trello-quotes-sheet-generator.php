@@ -358,20 +358,19 @@ function wtqsg_rebuild_and_update_all_data($sheets_service, $is_monthly_job = fa
     $trello_api_key = defined('TRELLO_API_KEY') ? TRELLO_API_KEY : null;
     $trello_api_token = defined('TRELLO_API_TOKEN') ? TRELLO_API_TOKEN : null;
 
-    // Con questo ricalcolo avremo i dati per ogni giorno del mese
+    // Calcola il conteggio delle "Richieste Ricevute" recuperando i dati live da Trello
+    // per evitare problemi con la cache non aggiornata.
     $trello_counts_by_day = [];
-    global $wpdb;
-    $cards_cache_table = STPA_CARDS_CACHE_TABLE;
-    $all_numeric_cards = $wpdb->get_results(
-        $wpdb->prepare("SELECT card_id FROM {$cards_cache_table} WHERE is_numeric_name = %d", 1), 
-        ARRAY_A
-    );
-    if (!empty($all_numeric_cards)) {
-        foreach($all_numeric_cards as $card) {
-            $creation_date = stsg_get_card_creation_date($card['card_id']);
-            if ($creation_date && (int)$creation_date->format('Y') === $year && (int)$creation_date->format('m') === $month) {
-                $day = (int)$creation_date->format('d');
-                $trello_counts_by_day[$day] = ($trello_counts_by_day[$day] ?? 0) + 1;
+    $all_trello_cards = stsg_get_all_cards_for_sheet(); // Funzione da functions.php
+    if (!empty($all_trello_cards) && !is_wp_error($all_trello_cards)) {
+        foreach ($all_trello_cards as $card) {
+            // Filtra solo le card con nome numerico, come faceva la query sulla cache
+            if (isset($card['name']) && is_numeric($card['name'])) {
+                $creation_date = stsg_get_card_creation_date($card['id']);
+                if ($creation_date && (int)$creation_date->format('Y') === $year && (int)$creation_date->format('m') === $month) {
+                    $day = (int)$creation_date->format('d');
+                    $trello_counts_by_day[$day] = ($trello_counts_by_day[$day] ?? 0) + 1;
+                }
             }
         }
     }
@@ -553,17 +552,17 @@ function wtqsg_daily_quotes_sheet_snapshot_update_cron_job() {
              $quotes_today = []; // Continua anche se FIC fallisce
         }
 
-        // Conteggio "Richieste Ricevute" da Trello per oggi
+        // Conteggio "Richieste Ricevute" da Trello per oggi (live)
         $richieste_ricevute_today = 0;
-        global $wpdb;
-        $cards_cache_table = STPA_CARDS_CACHE_TABLE;
-        $all_numeric_cards = $wpdb->get_results( $wpdb->prepare("SELECT card_id FROM {$cards_cache_table} WHERE is_numeric_name = %d", 1), ARRAY_A);
-        if (!empty($all_numeric_cards)) {
+        $all_trello_cards = stsg_get_all_cards_for_sheet();
+        if (!empty($all_trello_cards) && !is_wp_error($all_trello_cards)) {
             $today_date_str = $date_to_update->format('Y-m-d');
-            foreach($all_numeric_cards as $card) {
-                $creation_date = stsg_get_card_creation_date($card['card_id']);
-                if ($creation_date && $creation_date->format('Y-m-d') === $today_date_str) {
-                    $richieste_ricevute_today++;
+            foreach ($all_trello_cards as $card) {
+                if (isset($card['name']) && is_numeric($card['name'])) {
+                    $creation_date = stsg_get_card_creation_date($card['id']);
+                    if ($creation_date && $creation_date->format('Y-m-d') === $today_date_str) {
+                        $richieste_ricevute_today++;
+                    }
                 }
             }
         }
